@@ -29,6 +29,7 @@ from lapzero.contract import (
 )
 from lapzero.sim.env import EnvConfig, LapZeroEnv, RewardFn, zero_reward
 from lapzero.sim.simulator import Pose, SimState
+from lapzero.sim.track import Centreline
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,7 @@ def make_env(
     seed: int,
     reward_fn: RewardFn = zero_reward,
     config: EnvConfig | None = None,
+    centreline: Centreline | None = None,
 ) -> LapZeroEnv:
     """Build a LapZeroEnv on F1TENTH Gym for one track.
 
@@ -207,9 +209,12 @@ def make_env(
         seed: Simulator seed (LiDAR noise). Seed the episode itself with env.reset(seed=...).
         reward_fn: Per-physics-step reward; defaults to the 0.0 placeholder.
         config: Episode and action-mapping settings; defaults to the contract values.
+        centreline: Track centreline in driving order, for info["progress"]; optional.
 
     Returns:
         The ready-to-reset env.
     """
     simulator = F1TenthSimulator(map_yaml, seed=seed)
-    return LapZeroEnv(simulator, start_pose, reward_fn=reward_fn, config=config)
+    return LapZeroEnv(
+        simulator, start_pose, reward_fn=reward_fn, config=config, centreline=centreline
+    )

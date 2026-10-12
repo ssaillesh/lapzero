@@ -1,5 +1,8 @@
 """Train the behaviour cloning policy on recorded human laps and track the run in MLflow.
 
+The weights are registered in the MLflow model registry: as champion if the registered model has
+none yet, otherwise as challenger.
+
 Usage (from the repo root):
     uv run python scripts/train_bc.py --seed 0 --epochs 50
 """
@@ -12,7 +15,7 @@ from pathlib import Path
 
 from lapzero.contract import LAPS_DIR
 from lapzero.training.bc import BCConfig, run_bc_training
-from lapzero.training.tracking import mlflow_run
+from lapzero.training.tracking import REGISTERED_MODEL, mlflow_run
 
 _DEFAULTS = BCConfig()
 
@@ -31,6 +34,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=_DEFAULTS.seed)
     parser.add_argument("--tracking-uri", default=Path("mlruns").resolve().as_uri())
     parser.add_argument("--experiment", default="lapzero-bc")
+    parser.add_argument("--registered-model", default=REGISTERED_MODEL)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -47,7 +51,14 @@ def main(argv: list[str] | None = None) -> None:
     with mlflow_run(
         tracking_uri=args.tracking_uri, experiment=args.experiment, run_name=args.output.stem
     ) as tracker:
-        run_bc_training(args.laps_dir, args.output, config, tracker, track_ids=args.tracks)
+        run_bc_training(
+            args.laps_dir,
+            args.output,
+            config,
+            tracker,
+            track_ids=args.tracks,
+            registered_model=args.registered_model,
+        )
 
 
 if __name__ == "__main__":

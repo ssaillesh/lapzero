@@ -1,4 +1,5 @@
-"""Integration test: record laps, run scripts/train_bc.py, check the weights and the MLflow run."""
+"""Integration test: record laps, run scripts/train_bc.py, check the weights, the MLflow run and
+the model registry."""
 
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import torch
 from mlflow.tracking import MlflowClient
 
 from lapzero.training.policy import load_policy
+from lapzero.training.tracking import ModelAlias, load_registered_policy
 from tests.conftest import record_lap
 
 pytestmark = pytest.mark.integration
@@ -56,4 +58,14 @@ def test_train_bc_script_saves_weights_and_records_a_finished_run(
     assert run.data.params["contract_version"] == "1.0.0"
     assert len(client.get_metric_history(run.info.run_id, "train_mse")) == 3
     artifacts = [artifact.path for artifact in client.list_artifacts(run.info.run_id)]
-    assert artifacts == ["bc_v1.pt"]
+    assert artifacts == ["policy"]  # the registered MLflow Model, not a raw weights file
+    registry = MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
+    champion = registry.get_model_version_by_alias("lapzero-policy", ModelAlias.CHAMPION)
+    assert champion.run_id == run.info.run_id
+    assert champion.tags == {"algorithm": "bc", "contract_version": "1.0.0"}
+    registered = load_registered_policy(
+        tracking_uri=tracking_uri, model_name="lapzero-policy", alias=ModelAlias.CHAMPION
+    )
+    obs = torch.rand(4, 113)
+    with torch.no_grad():
+        torch.testing.assert_close(registered(obs), load_policy(output)(obs))

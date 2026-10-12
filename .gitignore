@@ -6,8 +6,9 @@ __pycache__/
 build/
 dist/
 
-# Virtual environment (uv)
-.venv/
+# Virtual environment (uv). On macOS .venv is a symlink to .venv.nosync (scripts/setup_dev.sh)
+.venv
+.venv.nosync/
 
 # Tool caches
 .pytest_cache/

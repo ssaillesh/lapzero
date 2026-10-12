@@ -22,7 +22,12 @@ from lapzero.contract import CONTRACT_VERSION, ContractViolationError
 from lapzero.io.lap_arrays import read_lap_arrays
 from lapzero.io.telemetry import DriverType, LapStatus, read_lap_telemetry
 from lapzero.training.policy import BCPolicy, major_version, save_policy
-from lapzero.training.tracking import RunTracker, contract_params, git_commit
+from lapzero.training.tracking import (
+    REGISTERED_MODEL,
+    RunTracker,
+    contract_params,
+    git_commit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -271,8 +276,12 @@ def run_bc_training(
     config: BCConfig,
     tracker: RunTracker,
     track_ids: Collection[str] | None = None,
+    registered_model: str = REGISTERED_MODEL,
 ) -> BCResult:
     """Load laps, train, save the weights and record the run as CLAUDE.md section 9 requires.
+
+    The weights are registered as a new version of `registered_model`, tagged algorithm=bc; it
+    becomes the champion if the model has none, otherwise the challenger.
 
     Args:
         laps_dir: Directory holding <track_id>/<lap_id>.json and .npz files.
@@ -280,6 +289,7 @@ def run_bc_training(
         config: Hyperparameters, including the seed.
         tracker: Run tracker (an MLflow run in production).
         track_ids: Only train on these tracks; None uses every track.
+        registered_model: Model registry name to add the version to.
 
     Returns:
         The training result.
@@ -301,6 +311,7 @@ def run_bc_training(
     result = train_bc(dataset, config, tracker)
     tracker.log_params({"train_laps": len(result.train_laps), "val_laps": len(result.val_laps)})
     save_policy(result.policy, output_path)
-    tracker.log_artifact(output_path)
     logger.info("saved BC policy to %s", output_path)
+    tags = {"algorithm": "bc", "contract_version": CONTRACT_VERSION}
+    tracker.register_policy(output_path, registered_model, tags)
     return result

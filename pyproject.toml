@@ -11,6 +11,7 @@ dependencies = [
     "pillow>=12.3.0",
     "pydantic>=2",
     "pygame>=2.5.2,<3",
+    "stable-baselines3>=2.9.0",
     "torch>=2.14.1",
 ]
 

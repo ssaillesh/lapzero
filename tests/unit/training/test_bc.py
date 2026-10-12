@@ -26,6 +26,7 @@ from lapzero.training.bc import (
     train_step,
 )
 from lapzero.training.policy import BCPolicy, load_policy
+from lapzero.training.tracking import RegisteredPolicy, alias_for_new_version
 from tests.conftest import record_lap
 
 MODEL_DRIVER = DriverInfo(
@@ -41,6 +42,7 @@ class FakeTracker:
         self.params: dict[str, Any] = {}
         self.metrics: list[tuple[str, float, int]] = []
         self.artifacts: list[Path] = []
+        self.registered: list[tuple[Path, str, dict[str, str]]] = []
 
     def log_params(self, params: Mapping[str, Any]) -> None:
         assert not set(params) & set(self.params), "param logged twice"
@@ -51,6 +53,13 @@ class FakeTracker:
 
     def log_artifact(self, path: Path) -> None:
         self.artifacts.append(path)
+
+    def register_policy(
+        self, checkpoint: Path, model_name: str, tags: Mapping[str, str]
+    ) -> RegisteredPolicy:
+        self.registered.append((checkpoint, model_name, dict(tags)))
+        alias = alias_for_new_version(has_champion=len(self.registered) > 1)
+        return RegisteredPolicy(model_name, str(len(self.registered)), alias)
 
     def steps(self, key: str) -> list[int]:
         return [step for name, _, step in self.metrics if name == key]
@@ -275,7 +284,9 @@ def test_run_saves_loadable_weights_and_logs_the_required_params(
     tracker = FakeTracker()
     output = tmp_path / "models" / "bc_v1.pt"
     result = run_bc_training(laps_dir, output, BCConfig(epochs=2, **SMALL), tracker)
-    assert tracker.artifacts == [output]
+    bc_tags = {"algorithm": "bc", "contract_version": "1.0.0"}
+    assert tracker.registered == [(output, "lapzero-policy", bc_tags)]
+    assert tracker.artifacts == []  # weights go to the model registry, not raw run artifacts
     obs = torch.rand(3, 113)
     with torch.no_grad():
         torch.testing.assert_close(load_policy(output)(obs), result.policy(obs))

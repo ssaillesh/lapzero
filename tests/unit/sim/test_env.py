@@ -23,6 +23,7 @@ from lapzero.sim.env import (
     zero_reward,
 )
 from lapzero.sim.simulator import Pose
+from lapzero.sim.track import Centreline
 from tests.conftest import START_POSE, FakeSimulator, make_state
 
 COAST = np.array([0.0, 0.0], dtype=np.float32)
@@ -243,6 +244,71 @@ def test_randomized_start_stays_within_contract_offsets_and_is_reproducible(
 def test_close_closes_the_simulator(make_env: EnvFactory, fake_sim: FakeSimulator) -> None:
     make_env().close()
     assert fake_sim.closed
+
+
+# Progress along the centreline (info["progress"])
+
+SQUARE = Centreline(np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]))  # 40 m
+
+
+def _progress_after_moving_to(env: LapZeroEnv, sim: FakeSimulator, x: float, y: float) -> float:
+    sim.pose = Pose(x, y, 0.0)
+    _, _, _, _, info = env.step(COAST)
+    progress: float = info["progress"]
+    return progress
+
+
+def test_progress_is_the_lap_fraction_driven_along_the_centreline(
+    fake_sim: FakeSimulator,
+) -> None:
+    env = LapZeroEnv(fake_sim, Pose(0.0, 0.0, 0.0), centreline=SQUARE)
+    _, info = env.reset(seed=0)
+    assert info["progress"] == 0.0
+    assert _progress_after_moving_to(env, fake_sim, 5.0, 0.5) == pytest.approx(0.125)
+    assert _progress_after_moving_to(env, fake_sim, 10.0, 10.0) == pytest.approx(0.5)
+
+
+def test_progress_is_measured_from_the_start_pose_and_wraps_each_lap(
+    fake_sim: FakeSimulator,
+) -> None:
+    env = LapZeroEnv(fake_sim, Pose(10.0, 5.0, 1.57), centreline=SQUARE)  # 15 m along the line
+    _, info = env.reset(seed=0)
+    assert info["progress"] == 0.0
+    assert _progress_after_moving_to(env, fake_sim, 10.0, 9.0) == pytest.approx(0.1)
+    assert _progress_after_moving_to(env, fake_sim, 10.0, 4.0) == pytest.approx(0.975)
+
+
+def test_progress_reference_is_the_fixed_start_pose_not_the_jittered_one(
+    fake_sim: FakeSimulator,
+) -> None:
+    config = EnvConfig(randomize_start=True)
+    env = LapZeroEnv(fake_sim, Pose(5.0, 0.0, 0.0), config=config, centreline=SQUARE)
+    _, info = env.reset(seed=0)
+    jittered = fake_sim.reset_poses[-1]
+    assert info["progress"] == pytest.approx((jittered.x - 5.0) / 40.0 % 1.0)
+
+
+def test_without_a_centreline_progress_stays_zero(fake_sim: FakeSimulator) -> None:
+    env = LapZeroEnv(fake_sim, START_POSE)
+    env.reset(seed=0)
+    assert env.centreline is None
+    assert _progress_after_moving_to(env, fake_sim, 25.0, -3.0) == 0.0
+
+
+def test_the_env_exposes_the_centreline_it_measures_progress_along(
+    fake_sim: FakeSimulator,
+) -> None:
+    assert LapZeroEnv(fake_sim, START_POSE, centreline=SQUARE).centreline is SQUARE
+
+
+@given(st.floats(-1e3, 1e3), st.floats(-1e3, 1e3))
+def test_progress_is_always_a_finite_lap_fraction(x: float, y: float) -> None:
+    sim = FakeSimulator()
+    env = LapZeroEnv(sim, START_POSE, centreline=SQUARE)
+    env.reset(seed=0)
+    progress = _progress_after_moving_to(env, sim, x, y)
+    assert math.isfinite(progress)
+    assert 0.0 <= progress <= 1.0
 
 
 # Config validation

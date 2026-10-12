@@ -47,6 +47,7 @@ from lapzero.contract import (
 )
 from lapzero.sim.observation import build_observation
 from lapzero.sim.simulator import Pose, SimState, Simulator
+from lapzero.sim.track import Centreline
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ RewardFn = Callable[[SimState, SimState], float]
 
 
 def zero_reward(prev: SimState, curr: SimState) -> float:
-    """Placeholder reward until lapzero/sim/reward.py exists.
+    """Default per-physics-step reward; training adds its own with lapzero.sim.reward.RacingReward.
 
     Args:
         prev: State before the physics step.
@@ -196,6 +197,7 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         start_pose: Pose,
         reward_fn: RewardFn = zero_reward,
         config: EnvConfig | None = None,
+        centreline: Centreline | None = None,
     ) -> None:
         """Create the env around an already started simulator.
 
@@ -204,6 +206,8 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             start_pose: Fixed start pose for this track (from tracks/<track_id>/start.yaml).
             reward_fn: Per-physics-step reward; defaults to the 0.0 placeholder.
             config: Episode and action-mapping settings; defaults to the contract values.
+            centreline: Track centreline in driving order, for info["progress"]; without one
+                progress is always 0.0.
         """
         super().__init__()
         self.observation_space = spaces.Box(OBS_LOW, OBS_HIGH, shape=(OBS_DIM,), dtype=np.float32)
@@ -212,6 +216,9 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         self._start_pose = start_pose
         self._reward_fn = reward_fn
         self._config = config or EnvConfig()
+        self._centreline = centreline
+        # Progress is measured from the fixed start pose (the start line), not a jittered one.
+        self._start_arc = centreline.project(start_pose.x, start_pose.y) if centreline else 0.0
         self._max_steps = round(self._config.max_episode_s / SIM_DT)
         self._stuck_limit = round(STUCK_S / SIM_DT)
         self._state: SimState | None = None
@@ -305,6 +312,22 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         """Close the underlying simulator."""
         self._sim.close()
 
+    @property
+    def centreline(self) -> Centreline | None:
+        """Centreline that info["progress"] is measured along, or None (progress stays 0.0)."""
+        return self._centreline
+
+    def _progress(self, pose: Pose) -> float:
+        """Fraction of a lap driven from the start line to `pose` along the centreline, in [0, 1].
+
+        The car's position is projected onto the centreline; 0.0 is the start pose's
+        projection and the value wraps back to 0.0 each lap. Always 0.0 without a centreline.
+        """
+        if self._centreline is None:
+            return 0.0
+        arc = self._centreline.project(pose.x, pose.y)
+        return (arc - self._start_arc) / self._centreline.length % 1.0
+
     def _info(self, state: SimState) -> dict[str, Any]:
         """Build the contract Section 4 info dict (raw SI values, not seen by the policy)."""
         return {
@@ -318,5 +341,5 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             "lap_count": state.lap_count,
             "lap_time": (self._sim_steps - self._lap_start_step) * SIM_DT,
             "collision": state.collision,
-            "progress": 0.0,  # placeholder until the track centreline module exists
+            "progress": self._progress(state.pose),
         }
