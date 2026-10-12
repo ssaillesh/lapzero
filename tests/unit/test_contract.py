@@ -42,5 +42,9 @@ def test_control_period_is_action_repeat_physics_steps() -> None:
     assert math.isclose(contract.CTRL_DT, 0.04)
 
 
+def test_control_rate_is_the_inverse_of_the_control_period() -> None:
+    assert math.isclose(contract.CTRL_HZ * contract.CTRL_DT, 1.0)
+
+
 def test_training_speed_cap_never_exceeds_simulator_limit() -> None:
     assert 0.0 < contract.V_MAX_TRAIN <= contract.SIM_V_MAX

@@ -37,6 +37,7 @@ N_BEAMS: Final = 108
 BEAM_BIN: Final = 10  # raw beams per downsampled beam
 ACTION_REPEAT: Final = 4  # physics steps per policy step
 CTRL_DT: Final = SIM_DT * ACTION_REPEAT  # s, policy runs at 25 Hz
+CTRL_HZ: Final = 25  # control (and telemetry recording) rate, Hz
 V_MAX_TRAIN: Final = 8.0  # m/s, default target velocity cap
 V_NORM: Final = 20.0  # m/s
 VY_NORM: Final = 5.0  # m/s
@@ -72,3 +73,15 @@ LAPS_PER_EPISODE_TRAIN: Final = 3
 MAX_EPISODE_S: Final = 120.0  # s
 STUCK_SPEED: Final = 0.2  # m/s, below this the car counts as stuck
 STUCK_S: Final = 3.0  # s stuck before the episode is truncated
+
+# Lap telemetry JSON + .npz (Section 5).
+TELEMETRY_SCHEMA: Final = "lapzero.lap_telemetry"
+TELEMETRY_SCHEMA_VERSION: Final = "1.0.0"
+SIMULATOR_NAME: Final = "f1tenth_gym"
+LAPS_DIR: Final = "data/laps"  # files go to LAPS_DIR/<track_id>/<lap_id>.json and .npz
+DECIMALS_TIME: Final = 2  # t and lap_time_s
+DECIMALS_POSITION: Final = 3  # x, y, track length
+DECIMALS_ANGLE: Final = 4  # theta, steer_rad
+DECIMALS_SPEED: Final = 3  # v_long, v_target, speed summaries
+DECIMALS_ACTION: Final = 3  # steer, throttle
+DECIMALS_PROGRESS: Final = 4  # not listed in Section 5.2; matches the Section 5.1 example
