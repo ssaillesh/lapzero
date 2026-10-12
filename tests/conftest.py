@@ -6,6 +6,7 @@ Hypothesis runs derandomized (fixed examples, no example database) to keep tests
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,6 +15,14 @@ from hypothesis import settings
 from numpy.typing import NDArray
 
 from lapzero.contract import RAW_BEAMS
+from lapzero.io.telemetry import (
+    DriverInfo,
+    DriverType,
+    InputDevice,
+    TrackDirection,
+    TrackInfo,
+)
+from lapzero.record.recorder import LapFiles, LapRecorder
 from lapzero.sim.env import EnvConfig, LapZeroEnv, RewardFn, zero_reward
 from lapzero.sim.simulator import Pose, SimState
 
@@ -21,6 +30,9 @@ settings.register_profile("lapzero", derandomize=True, database=None, deadline=N
 settings.load_profile("lapzero")
 
 START_POSE = Pose(1.0, 2.0, 0.5)
+HUMAN_DRIVER = DriverInfo(
+    type=DriverType.HUMAN, name="tester", human_input_device=InputDevice.KEYBOARD
+)
 
 _WILD_RANGES = np.array([np.nan, np.inf, -np.inf, -5.0, 0.0, 1e6])
 
@@ -98,6 +110,48 @@ def make_state(**overrides: Any) -> SimState:
         "lap_count": 0,
     }
     return SimState(**(fields | overrides))
+
+
+def record_lap(
+    root: Path,
+    *,
+    track_id: str = "track_a",
+    driver: DriverInfo = HUMAN_DRIVER,
+    steps: int = 5,
+    crash: bool = False,
+    seed: int = 0,
+    policy: Callable[[NDArray[np.float32]], NDArray[np.float32]] | None = None,
+) -> LapFiles:
+    """Record one lap on a fresh FakeSimulator via LapRecorder.
+
+    The scan is a seeded random (constant) wall layout. Actions come from `policy(obs)`, or are
+    seeded uniform noise when no policy is given. The last of `steps` control steps crosses the
+    start line, or collides when `crash` is set, so exactly one completed (or crashed) lap is
+    written under root/<track_id>/.
+    """
+    rng = np.random.default_rng(seed)
+    sim = FakeSimulator()
+    sim.scan = rng.uniform(2.0, 30.0, RAW_BEAMS)
+    config = EnvConfig(laps_per_episode=1)
+    env = LapZeroEnv(sim, START_POSE, config=config)
+    track = TrackInfo(track_id=track_id, direction=TrackDirection.CCW, length_m=50.0)
+    recorder = LapRecorder(track, driver, sim_version="test", env_config=config, root=root)
+    obs, info = env.reset(seed=seed)
+    recorder.start_episode(obs, info, seed=seed)
+    written: list[LapFiles] = []
+    for step in range(steps):
+        if step == steps - 1 and crash:
+            sim.collision_at_step = sim.steps + 1
+        elif step == steps - 1:
+            sim.lap_count = 1
+        if policy is None:
+            action = rng.uniform(-1.0, 1.0, size=2).astype(np.float32)
+        else:
+            action = policy(obs)
+        obs, reward, terminated, truncated, info = env.step(action)
+        written += recorder.record_step(action, obs, reward, terminated, truncated, info)
+    (files,) = written
+    return files
 
 
 @pytest.fixture

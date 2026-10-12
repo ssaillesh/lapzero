@@ -6,10 +6,21 @@ requires-python = ">=3.11"
 dependencies = [
     "f1tenth-gym",
     "gymnasium>=0.29.1",
+    "mlflow-skinny>=3.17.0",
     "numpy>=2.4.6",
     "pillow>=12.3.0",
     "pydantic>=2",
+    "torch>=2.14.1",
 ]
+
+[build-system]
+# Installs lapzero into the venv (editable) so scripts/ can import it, as CLAUDE.md section 3 expects.
+requires = ["uv_build>=0.9.30,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lapzero"
+module-root = ""
 
 [dependency-groups]
 dev = [
