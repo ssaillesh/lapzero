@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.4.6",
     "pillow>=12.3.0",
     "pydantic>=2",
+    "pygame>=2.5.2,<3",
     "torch>=2.14.1",
 ]
 

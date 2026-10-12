@@ -135,12 +135,13 @@ class F1TenthSimulator:
     process. Do not run envs on different maps in the same process.
     """
 
-    def __init__(self, map_yaml: Path, *, seed: int) -> None:
+    def __init__(self, map_yaml: Path, *, seed: int, render: bool = False) -> None:
         """Load the map and start the simulator.
 
         Args:
             map_yaml: ROS map yaml; see load_track.
             seed: Seed for the simulator's LiDAR noise.
+            render: Open F1TENTH's pygame window, drawn by render().
 
         Raises:
             FileNotFoundError: If the map files are missing.
@@ -156,7 +157,8 @@ class F1TenthSimulator:
                 "seed": seed,
                 "control_input": ["speed", "steering_angle"],
                 "observation_config": {"type": "features", "features": _F1TENTH_FEATURES},
-            }
+            },
+            render_mode="human" if render else None,
         )
         verify_baseline(self._env)
 
@@ -169,6 +171,10 @@ class F1TenthSimulator:
         """Advance one physics step; F1TENTH's own done flag is ignored (LapZeroEnv decides)."""
         obs, *_ = self._env.step(np.array([[steer_rad, v_target]]))
         return state_from_f1tenth_obs(obs)
+
+    def render(self) -> None:
+        """Draw the latest state in the F1TENTH window; does nothing unless opened with render."""
+        self._env.render()
 
     def close(self) -> None:
         """Close the F1TENTH env."""
