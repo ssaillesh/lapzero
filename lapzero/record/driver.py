@@ -134,26 +134,40 @@ def slew(current: float, target: float, rate: float) -> float:
     return current + math.copysign(rate, delta)
 
 
+STEER_RATE_LIMIT = STEER_RATE_MAX / STEER_MAX
+"""The env's steering rate limit in normalized steer per control step (contract Section 2.2)."""
+
+
 @dataclass(frozen=True, slots=True)
 class DriverConfig:
     """Human driver settings, in normalized action units per control step (CTRL_DT).
 
+    Both steering rates are capped at STEER_RATE_LIMIT, so the env never rate-limits a human
+    action: the recorded steer action, the prev_steer observation and the applied angle agree.
+
     Attributes:
-        steer_rate: Largest steer change per control step. The default, STEER_RATE_MAX /
-            STEER_MAX, equals the env's steering rate limit (contract Section 2.2), so the
-            recorded steer action, the prev_steer observation and the applied angle agree.
+        steer_rate: Largest steer change per control step while turning away from centre. The
+            default takes 0.68 s from centre to full lock, so a key tap is a small correction.
+        steer_return_rate: Largest steer change per control step while moving back toward
+            centre. Faster than steer_rate so releasing a key straightens the car promptly.
         throttle_rate: Largest throttle change per control step. The default takes the pedal
             from released to floored in two control steps (0.08 s).
     """
 
-    steer_rate: float = STEER_RATE_MAX / STEER_MAX
+    steer_rate: float = 0.06
+    steer_return_rate: float = 0.15
     throttle_rate: float = 0.5
 
     def __post_init__(self) -> None:
-        for name in ("steer_rate", "throttle_rate"):
+        limits = {
+            "steer_rate": STEER_RATE_LIMIT,
+            "steer_return_rate": STEER_RATE_LIMIT,
+            "throttle_rate": 2.0,
+        }
+        for name, limit in limits.items():
             value = getattr(self, name)
-            if not (math.isfinite(value) and 0.0 < value <= 2.0):
-                raise ValueError(f"DriverConfig.{name} must be in (0, 2], got {value}")
+            if not (math.isfinite(value) and 0.0 < value <= limit):
+                raise ValueError(f"DriverConfig.{name} must be in (0, {limit:.4f}], got {value}")
 
 
 class HumanDriver:
@@ -181,10 +195,15 @@ class HumanDriver:
 
         Returns:
             New float32 array of shape (ACT_DIM,) in [-1, 1]: each element moved from the
-            previous action toward its request by at most its rate.
+            previous action toward its request by at most its rate (steer_return_rate while
+            the steering moves back toward centre).
         """
+        cfg = self._config
+        current_steer, goal_steer = float(self._action[STEER]), _clip_unit(steer)
+        toward_centre = current_steer * (goal_steer - current_steer) < 0.0
+        steer_rate = cfg.steer_return_rate if toward_centre else cfg.steer_rate
         action = np.zeros(ACT_DIM, dtype=np.float32)
-        action[STEER] = slew(float(self._action[STEER]), steer, self._config.steer_rate)
-        action[THROTTLE] = slew(float(self._action[THROTTLE]), throttle, self._config.throttle_rate)
+        action[STEER] = slew(current_steer, goal_steer, steer_rate)
+        action[THROTTLE] = slew(float(self._action[THROTTLE]), throttle, cfg.throttle_rate)
         self._action = action
         return action.copy()

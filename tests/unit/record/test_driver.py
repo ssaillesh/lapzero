@@ -135,22 +135,42 @@ def test_slew_output_is_finite_in_range_and_within_rate_of_the_last_value(
 # HumanDriver
 
 
-def test_holding_left_ramps_to_full_lock_in_three_control_steps() -> None:
+def test_holding_left_ramps_to_full_lock_in_seventeen_control_steps() -> None:
     driver = HumanDriver()
-    steers = [float(driver.act(1.0, 0.0)[0]) for _ in range(4)]
-    assert steers == pytest.approx([STEER_STEP, 2 * STEER_STEP, 1.0, 1.0], abs=1e-6)
+    steers = [float(driver.act(1.0, 0.0)[0]) for _ in range(18)]
+    assert steers[:3] == pytest.approx([0.06, 0.12, 0.18], abs=1e-6)
+    assert steers[15] == pytest.approx(0.96, abs=1e-5)
+    assert steers[16:] == [1.0, 1.0]
 
 
-def test_releasing_the_steering_returns_to_centre_at_the_same_rate() -> None:
+def test_releasing_the_steering_returns_to_centre_faster_than_it_turned_in() -> None:
     driver = HumanDriver()
-    for _ in range(3):
+    for _ in range(17):
         driver.act(-1.0, 0.0)
-    steers = [float(driver.act(0.0, 0.0)[0]) for _ in range(3)]
-    assert steers == pytest.approx([-1.0 + STEER_STEP, -1.0 + 2 * STEER_STEP, 0.0], abs=1e-6)
+    steers = [float(driver.act(0.0, 0.0)[0]) for _ in range(8)]
+    expected = [-0.85, -0.70, -0.55, -0.40, -0.25, -0.10, 0.0, 0.0]
+    assert steers == pytest.approx(expected, abs=1e-5)
 
 
-def test_default_steer_rate_equals_the_env_steering_rate_limit() -> None:
-    assert DriverConfig().steer_rate * STEER_MAX == pytest.approx(STEER_RATE_MAX)
+def test_counter_steer_returns_to_centre_fast_then_turns_in_at_the_turn_in_rate() -> None:
+    driver = HumanDriver()
+    for _ in range(5):
+        driver.act(1.0, 0.0)  # 0.30 left
+    steers = [float(driver.act(-1.0, 0.0)[0]) for _ in range(4)]
+    assert steers == pytest.approx([0.15, 0.0, -0.06, -0.12], abs=1e-5)
+
+
+def test_default_steering_rates_stay_within_the_env_steering_rate_limit() -> None:
+    config = DriverConfig()
+    assert config.steer_rate * STEER_MAX <= STEER_RATE_MAX
+    assert config.steer_return_rate * STEER_MAX <= STEER_RATE_MAX
+
+
+@pytest.mark.parametrize("name", ["steer_rate", "steer_return_rate"])
+def test_config_rejects_steering_rates_the_env_would_rate_limit(name: str) -> None:
+    DriverConfig(**{name: STEER_STEP})  # exactly the env limit is allowed
+    with pytest.raises(ValueError, match=name):
+        DriverConfig(**{name: STEER_STEP + 0.01})
 
 
 def test_throttle_floors_in_two_steps_and_full_brake_takes_four_from_full_throttle() -> None:
@@ -170,8 +190,9 @@ def test_act_returns_a_float32_copy_of_shape_two() -> None:
 
 
 def test_reset_centres_the_steering_and_releases_the_pedals() -> None:
-    driver = HumanDriver(DriverConfig(steer_rate=2.0, throttle_rate=2.0))
-    driver.act(1.0, 1.0)
+    driver = HumanDriver()
+    for _ in range(3):
+        driver.act(1.0, 1.0)  # without reset, the next coast step would still be [0.03, 0.5]
     driver.reset()
     np.testing.assert_array_equal(driver.act(0.0, 0.0), [0.0, 0.0])
 
@@ -181,9 +202,9 @@ def test_custom_rates_set_the_ramp() -> None:
     np.testing.assert_allclose(driver.act(1.0, 1.0), [0.1, 1.0])
 
 
-@pytest.mark.parametrize("name", ["steer_rate", "throttle_rate"])
+@pytest.mark.parametrize("name", ["steer_rate", "steer_return_rate", "throttle_rate"])
 @pytest.mark.parametrize("value", [0.0, -0.5, 2.5, np.nan, np.inf])
-def test_config_rejects_rates_outside_zero_to_two(name: str, value: float) -> None:
+def test_config_rejects_non_positive_too_large_or_non_finite_rates(name: str, value: float) -> None:
     with pytest.raises(ValueError, match=name):
         DriverConfig(**{name: value})
 
@@ -193,11 +214,13 @@ def test_any_request_sequence_gives_bounded_rate_limited_actions(
     requests: list[tuple[float, float]],
 ) -> None:
     driver, config = HumanDriver(), DriverConfig()
+    steer_step = max(config.steer_rate, config.steer_return_rate)
     previous = np.zeros(2, dtype=np.float32)
     for steer, throttle in requests:
         action = driver.act(steer, throttle)
         assert np.isfinite(action).all()
         assert ((action >= -1.0) & (action <= 1.0)).all()
-        assert abs(action[0] - previous[0]) <= config.steer_rate + 1e-6
+        assert abs(action[0] - previous[0]) <= steer_step + 1e-6
+        assert abs(action[0] - previous[0]) * STEER_MAX <= STEER_RATE_MAX + 1e-6
         assert abs(action[1] - previous[1]) <= config.throttle_rate + 1e-6
         previous = action

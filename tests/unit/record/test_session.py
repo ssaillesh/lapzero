@@ -13,7 +13,7 @@ import numpy as np
 import pygame
 import pytest
 
-from lapzero.contract import CTRL_DT, STEER_MAX, STEER_RATE_MAX
+from lapzero.contract import CTRL_DT, STEER_MAX
 from lapzero.io.telemetry import (
     DriverType,
     InputDevice,
@@ -36,7 +36,6 @@ GO_LEFT = InputFrame(1.0, 1.0)
 COAST = InputFrame(0.0, 0.0)
 QUIT = InputFrame(quit=True)
 RESTART = InputFrame(restart=True)
-STEER_STEP = STEER_RATE_MAX / STEER_MAX
 
 
 class ScriptedSource:
@@ -156,8 +155,8 @@ def test_live_keyboard_session_writes_a_valid_lap_with_ramped_actions(
     assert lap.driver.human_input_device is InputDevice.KEYBOARD
     assert lap.sim.seed == SEED
     assert lap.result.sample_count == 7
-    s = STEER_STEP
-    assert lap.frames.steer == pytest.approx([s, 2 * s, 1.0, 1.0, 1 - s, 1 - 2 * s, 0.0], abs=1e-3)
+    # Turn in at 0.06 per step while Left is held, return at 0.15 per step once released.
+    assert lap.frames.steer == pytest.approx([0.06, 0.12, 0.18, 0.24, 0.09, 0.0, 0.0], abs=1e-3)
     assert lap.frames.throttle == [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     # The ramp equals the env rate limit, so the applied angle is the recorded action's angle.
     applied = np.asarray(lap.frames.steer_rad)

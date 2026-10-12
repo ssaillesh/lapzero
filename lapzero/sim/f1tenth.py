@@ -7,11 +7,12 @@ information, so its objects are typed as Any at this boundary.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import numpy as np
 from PIL import Image
@@ -30,6 +31,10 @@ from lapzero.sim.env import EnvConfig, LapZeroEnv, RewardFn, zero_reward
 from lapzero.sim.simulator import Pose, SimState
 
 logger = logging.getLogger(__name__)
+
+RENDER_MIRRORED: Final = True
+"""F1TENTH's window draws world +y downward, so it shows the world mirrored: a left (CCW) turn
+looks like a right turn on screen. Human input steers by the screen to compensate."""
 
 _EGO_ID = "agent_0"
 _F1TENTH_FEATURES = [
@@ -163,9 +168,14 @@ class F1TenthSimulator:
         verify_baseline(self._env)
 
     def reset(self, pose: Pose) -> SimState:
-        """Place the car at rest at `pose` and return the first reading."""
+        """Place the car at rest at `pose` and return the first reading.
+
+        F1TENTH builds its reset observation before recounting laps, so that observation still
+        carries the previous episode's lap count. A reset car has completed no laps, so the
+        reading reports 0; F1TENTH's own count restarts from 0 on the next step.
+        """
         obs, _ = self._env.reset(options={"poses": np.array([[pose.x, pose.y, pose.theta]])})
-        return state_from_f1tenth_obs(obs)
+        return dataclasses.replace(state_from_f1tenth_obs(obs), lap_count=0)
 
     def step(self, steer_rad: float, v_target: float) -> SimState:
         """Advance one physics step; F1TENTH's own done flag is ignored (LapZeroEnv decides)."""

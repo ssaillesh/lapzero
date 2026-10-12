@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+import pygame
 import pytest
 
 from lapzero.contract import OBS_HIGH, OBS_LOW, STEER_MAX
@@ -26,7 +27,7 @@ from lapzero.record.pygame_input import open_input
 from lapzero.record.recorder import LapRecorder
 from lapzero.record.session import drive_session
 from lapzero.sim.env import EnvConfig, LapZeroEnv
-from lapzero.sim.f1tenth import F1TenthSimulator
+from lapzero.sim.f1tenth import RENDER_MIRRORED, F1TenthSimulator
 from lapzero.sim.simulator import Pose
 from tests.conftest import HUMAN_DRIVER
 
@@ -102,7 +103,7 @@ def test_keyboard_session_into_a_wall_records_a_valid_crashed_lap(
     assert lap.result.collision is True
     assert lap.sim.seed == 3
     steer = np.asarray(lap.frames.steer)
-    assert steer[:3] == pytest.approx([0.358, 0.716, 1.0], abs=1e-3)
+    assert steer[:3] == pytest.approx([0.06, 0.12, 0.18], abs=1e-3)
     assert np.asarray(lap.frames.steer_rad) == pytest.approx(steer * STEER_MAX, abs=1e-3)
     assert max(lap.frames.v_target) <= config.v_max
     arrays = read_lap_arrays(lap_files.npz_path)
@@ -117,3 +118,19 @@ def test_keyboard_input_reads_key_state_from_the_f1tenth_window(
     LapZeroEnv(windowed_sim, Pose(0.0, 0.0, 0.0)).reset(seed=0)
     windowed_sim.render()  # the renderer drains pygame's event queue; key state must survive it
     assert open_input(InputDevice.KEYBOARD).poll() == InputFrame(0.0, 0.0)
+
+
+def test_f1tenth_window_draws_the_world_mirrored_as_render_mirrored_says(
+    windowed_sim: F1TenthSimulator,
+) -> None:
+    # Car at (0, -8) heading +x: the south wall is 1.7 m away on the car's right (world -y).
+    # The window follows the car, so the car is at its centre; 30 px per metre at default zoom.
+    LapZeroEnv(windowed_sim, Pose(0.0, -8.0, 0.0)).reset(seed=0)
+    windowed_sim.render()
+    frame = pygame.surfarray.array3d(pygame.display.get_surface())  # indexed [x, y, rgb]
+    centre = frame.shape[0] // 2
+    black_rows = np.flatnonzero(frame[centre].sum(axis=1) == 0)
+    wall_rows = black_rows[np.abs(black_rows - centre) > 15]  # skip the car's own outline
+    nearest_wall = wall_rows[np.argmin(np.abs(wall_rows - centre))]
+    south_wall_drawn_above_car = bool(nearest_wall < centre)
+    assert south_wall_drawn_above_car == RENDER_MIRRORED

@@ -78,6 +78,7 @@ class PygameInput:
         layout: GamepadLayout | None = None,
         deadzone: float = DEFAULT_DEADZONE,
         *,
+        mirror_steering: bool = False,
         get_pressed: Callable[[], Sequence[bool]] = pygame.key.get_pressed,
         pump: Callable[[], None] = pygame.event.pump,
     ) -> None:
@@ -87,6 +88,8 @@ class PygameInput:
             gamepad: Opened joystick to drive with; None drives with the arrow keys.
             layout: Gamepad axis numbers; defaults to GamepadLayout().
             deadzone: Gamepad stick deadzone, in [0, 1).
+            mirror_steering: Negate the steering request, for a window that shows the world
+                mirrored, so the human steers by what they see. The action stays physical.
             get_pressed: Reads key state; injectable for tests.
             pump: Updates pygame's device state; injectable for tests.
 
@@ -104,6 +107,7 @@ class PygameInput:
             raise ValueError(f"deadzone must be in [0, 1), got {deadzone}")
         self._gamepad = gamepad
         self._deadzone = deadzone
+        self._mirror_steering = mirror_steering
         self._get_pressed = get_pressed
         self._pump = pump
         self._restart_held = False
@@ -135,11 +139,17 @@ class PygameInput:
                 brake=trigger_travel(pad.get_axis(self._layout.brake_axis)),
             )
             steer, throttle = gamepad_target(reading, self._deadzone)
+        if self._mirror_steering and steer != 0.0:
+            steer = -steer
         return InputFrame(steer, throttle, quit=bool(keys[pygame.K_ESCAPE]), restart=restart)
 
 
 def open_input(
-    device: InputDevice, *, gamepad_index: int = 0, layout: GamepadLayout | None = None
+    device: InputDevice,
+    *,
+    gamepad_index: int = 0,
+    layout: GamepadLayout | None = None,
+    mirror_steering: bool = False,
 ) -> PygameInput:
     """Open keyboard or gamepad input. Call once the F1TENTH render window is open.
 
@@ -147,6 +157,7 @@ def open_input(
         device: Input device the human drives with.
         gamepad_index: Joystick number to use when `device` is a gamepad.
         layout: Gamepad axis numbers; defaults to GamepadLayout().
+        mirror_steering: Steer by a mirrored window; see PygameInput.
 
     Returns:
         The input source.
@@ -156,11 +167,11 @@ def open_input(
         ValueError: If `layout` names an axis the gamepad does not have.
     """
     if device is InputDevice.KEYBOARD:
-        return PygameInput()
+        return PygameInput(mirror_steering=mirror_steering)
     pygame.joystick.init()
     count = pygame.joystick.get_count()
     if not 0 <= gamepad_index < count:
         raise RuntimeError(f"no gamepad at gamepad_index={gamepad_index}; {count} connected")
     gamepad = pygame.joystick.Joystick(gamepad_index)
     logger.info("driving with gamepad %d: %s", gamepad_index, gamepad.get_name())
-    return PygameInput(gamepad, layout)
+    return PygameInput(gamepad, layout, mirror_steering=mirror_steering)

@@ -10,9 +10,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lapzero.sim.env import LapZeroEnv
+from lapzero.io.telemetry import LapStatus, TrackDirection, TrackInfo
+from lapzero.record.recorder import LapRecorder
+from lapzero.sim.env import EnvConfig, LapZeroEnv
 from lapzero.sim.f1tenth import make_env
 from lapzero.sim.simulator import Pose
+from tests.conftest import HUMAN_DRIVER
 
 pytestmark = pytest.mark.integration
 
@@ -75,3 +78,33 @@ def test_beam_zero_side_is_the_cars_right_and_full_left_steer_turns_ccw(room_map
         assert obs[110] > 0.0  # yaw rate CCW positive while steering full left
     finally:
         env.close()
+
+
+def test_a_lap_after_a_reset_counts_from_zero_and_is_recorded(
+    room_map: Path, tmp_path: Path
+) -> None:
+    # F1TENTH builds its reset observation before recounting laps, so without care the next
+    # episode would start at the previous episode's lap count and its lap would go unrecorded.
+    config = EnvConfig(laps_per_episode=1)
+    env = make_env(room_map, Pose(0.0, 0.0, 0.0), seed=0, config=config)
+    track = TrackInfo(track_id="room", direction=TrackDirection.CCW, length_m=4.0)
+    recorder = LapRecorder(
+        track, HUMAN_DRIVER, sim_version="test", env_config=config, root=tmp_path
+    )
+    statuses = []
+    try:
+        for episode in range(2):
+            obs, info = env.reset(seed=episode)
+            assert info["lap_count"] == 0
+            recorder.start_episode(obs, info, seed=episode)
+            done, steps = False, 0
+            while not done and steps < 500:
+                throttle = np.clip((1.5 - info["v_long"]) / 0.6, -1.0, 1.0)  # hold about 1.5 m/s
+                action = np.array([1.0, throttle], dtype=np.float32)  # tight circle to the left
+                obs, reward, terminated, truncated, info = env.step(action)
+                laps = recorder.record_step(action, obs, reward, terminated, truncated, info)
+                statuses += [lap.status for lap in laps]
+                done, steps = terminated or truncated, steps + 1
+    finally:
+        env.close()
+    assert statuses == [LapStatus.COMPLETED, LapStatus.COMPLETED]

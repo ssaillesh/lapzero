@@ -3,6 +3,7 @@
 Key state and joysticks are faked; the open_input tests use SDL's headless dummy video driver.
 """
 
+import math
 from collections.abc import Iterator
 from typing import Any
 
@@ -159,6 +160,26 @@ def test_invalid_deadzone_is_rejected_when_the_input_is_built(deadzone: float) -
         PygameInput(deadzone=deadzone)
 
 
+# Mirrored window
+
+
+@pytest.mark.parametrize(
+    ("held", "steer"), [((pygame.K_LEFT,), -1.0), ((pygame.K_RIGHT,), 1.0), ((), 0.0)]
+)
+def test_mirrored_window_negates_keyboard_steering(held: tuple[int, ...], steer: float) -> None:
+    script = KeyScript(FakeKeys(*held, pygame.K_UP))
+    source = PygameInput(mirror_steering=True, get_pressed=script.get_pressed, pump=script.pump)
+    frame = source.poll()
+    assert (frame.steer, frame.throttle) == (steer, 1.0)
+    assert math.copysign(1.0, frame.steer) == math.copysign(1.0, steer or 1.0)  # no -0.0
+
+
+def test_mirrored_window_negates_gamepad_steering_but_not_throttle() -> None:
+    pad = FakeJoystick()
+    pad.axes[0], pad.axes[5] = -1.0, 1.0
+    assert _gamepad(pad, mirror_steering=True).poll() == InputFrame(-1.0, 1.0)
+
+
 # open_input
 
 
@@ -173,8 +194,9 @@ def headless_display(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("headless_display")
-def test_keyboard_input_polls_the_real_pygame_key_state() -> None:
-    source = open_input(InputDevice.KEYBOARD)
+@pytest.mark.parametrize("mirror_steering", [False, True])
+def test_keyboard_input_polls_the_real_pygame_key_state(mirror_steering: bool) -> None:
+    source = open_input(InputDevice.KEYBOARD, mirror_steering=mirror_steering)
     assert source.poll() == InputFrame(0.0, 0.0)
 
 
@@ -188,9 +210,10 @@ def test_gamepad_input_opens_the_joystick_at_the_given_index(
     monkeypatch.setattr(pygame.joystick, "init", lambda: None)
     monkeypatch.setattr(pygame.joystick, "get_count", lambda: 2)
     monkeypatch.setattr(pygame.joystick, "Joystick", lambda index: opened.append(index) or pad)
-    source = open_input(InputDevice.GAMEPAD, gamepad_index=1)
+    pad.axes[0] = 1.0  # stick full right
+    source = open_input(InputDevice.GAMEPAD, gamepad_index=1, mirror_steering=True)
     assert opened == [1]
-    assert source.poll() == InputFrame(0.0, 1.0)
+    assert source.poll() == InputFrame(1.0, 1.0)  # mirrored: screen right is physical left
 
 
 @pytest.mark.parametrize("index", [0, -1])
