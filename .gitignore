@@ -1,0 +1,41 @@
+# Python bytecode and packaging
+__pycache__/
+*.py[cod]
+*.egg-info
+.eggs/
+build/
+dist/
+
+# Virtual environment (uv)
+.venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Secrets: real env files stay local, the documented example is committed
+.env
+.env.*
+!.env.example
+
+# Recorded laps, local MLflow store and model weights (CLAUDE.md section 11)
+data/
+mlruns/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Frontend dependencies
+node_modules/
+
+# OS files
+.DS_Store

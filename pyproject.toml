@@ -1,0 +1,51 @@
+[project]
+name = "lapzero"
+version = "0.1.0"
+description = "AI race driver trained in the F1TENTH Gym simulator, with a CI release gate."
+requires-python = ">=3.11"
+dependencies = [
+    "f1tenth-gym",
+    "gymnasium>=0.29.1",
+    "numpy>=2.4.6",
+    "pillow>=12.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.169.0",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: slow tests that start the real simulator, a database, or the release gate",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Ruff also formats code blocks in Markdown; the binding contract doc must never be rewritten
+# by tooling.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[[tool.mypy.overrides]]
+# f1tenth_gym ships no type information (no py.typed marker).
+module = ["f1tenth_gym", "f1tenth_gym.*"]
+ignore_missing_imports = true
+
+[tool.uv.sources]
+f1tenth-gym = { git = "https://github.com/f1tenth/f1tenth_gym", rev = "5a301bd0ae1ceaf7dec653e7549c8d099db58a6b" }
