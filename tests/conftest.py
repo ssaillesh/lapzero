@@ -5,7 +5,8 @@ Hypothesis runs derandomized (fixed examples, no example database) to keep tests
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from hypothesis import settings
 from numpy.typing import NDArray
 
 from lapzero.contract import RAW_BEAMS
+from lapzero.eval.sweep import SWEEP_FILE, LevelReport, SweepReport, SweepRun, friction_grid
 from lapzero.io.telemetry import (
     DriverInfo,
     DriverType,
@@ -23,8 +25,10 @@ from lapzero.io.telemetry import (
     TrackInfo,
 )
 from lapzero.record.recorder import LapFiles, LapRecorder
+from lapzero.record.ulid import new_ulid
 from lapzero.sim.env import EnvConfig, LapZeroEnv, RewardFn, zero_reward
 from lapzero.sim.simulator import Pose, SimState
+from lapzero.training.tracking import mlflow_client
 
 settings.register_profile("lapzero", derandomize=True, database=None, deadline=None)
 settings.load_profile("lapzero")
@@ -114,6 +118,67 @@ def make_state(**overrides: Any) -> SimState:
         "lap_count": 0,
     }
     return SimState(**(fields | overrides))
+
+
+def make_sweep_report(
+    policy_version: str | None,
+    *,
+    alias: str = "champion",
+    sweep_id: str | None = None,
+    track_id: str = "oschersleben",
+    nominal_lap_s: float = 46.56,
+) -> SweepReport:
+    """A release-gate friction sweep of lapzero-policy@`alias` at `policy_version`.
+
+    policy_version None means the sweep evaluated a local checkpoint. Every episode on the 0.50 to
+    1.05 grid (10 per level) completes; laps at mu 1.05 take `nominal_lap_s`, elsewhere 48.0 s.
+    """
+    levels = tuple(
+        LevelReport(
+            friction_mu=mu,
+            episodes=10,
+            completed=10,
+            crashed=0,
+            completion_rate=1.0,
+            mean_lap_time_s=nominal_lap_s if math.isclose(mu, 1.05) else 48.0,
+            eval_dir=f"mu_{mu:g}",
+        )
+        for mu in friction_grid(0.50, 1.05, 0.05)
+    )
+    run = SweepRun(
+        sweep_id=sweep_id or new_ulid(),
+        git_commit="abc123",
+        policy=f"lapzero-policy@{alias}" if policy_version is not None else "policy.pt",
+        policy_version=policy_version,
+        track_id=track_id,
+        map_yaml=f"data/tracks/{track_id}/{track_id}.yaml",
+        start_pose=(0.0, 0.0, 2.857),
+        seed=0,
+        episodes_per_level=10,
+        randomize_start=True,
+    )
+    return SweepReport(run=run, levels=levels, crashes=())
+
+
+def register_model_versions(
+    tracking_uri: str, model_name: str, versions: int, aliases: Mapping[str, str]
+) -> None:
+    """Register `versions` bare model versions (no weights) tagged algorithm=ppo, then set
+    `aliases` (alias to version number)."""
+    client = mlflow_client(tracking_uri)
+    client.create_registered_model(model_name)
+    for i in range(versions):
+        client.create_model_version(model_name, f"file:///weights/{i}", tags={"algorithm": "ppo"})
+    for alias, version in aliases.items():
+        client.set_registered_model_alias(model_name, alias, version)
+
+
+def write_sweep_report(root: Path, report: SweepReport) -> Path:
+    """Write `report` as sweep.json in root/<track_id>/<sweep_id>/, like write_sweep; return it."""
+    directory = root / report.run.track_id / report.run.sweep_id
+    directory.mkdir(parents=True)
+    (directory / SWEEP_FILE).write_text(report.model_dump_json(indent=2) + "\n")
+    return directory
 
 
 def record_lap(
