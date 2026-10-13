@@ -1,0 +1,225 @@
+@import "tailwindcss";
+
+/*
+ * LapZero design tokens. One dark theme (a timing-screen workstation), one accent.
+ *
+ * Roles: ground (page), panel and raised (one tone step each), line (1px structure), ink (text),
+ * muted (secondary text, 6.8:1 on ground), faint (tertiary text, 4.6:1 on ground), accent (acid
+ * lime: the champion, the car, the playhead, the active view; under 5% of any screen).
+ * Semantic: ok (connected, gate passed), warn, bad (failures), steer (the second chart series).
+ * Corners: every surface and control uses --radius-ctl (3px); only status dots are round.
+ */
+@theme {
+  --color-ground: #0b0c0e;
+  --color-panel: #111316;
+  --color-raised: #171a1e;
+  --color-line: #22262b;
+  --color-line-strong: #30353b;
+  --color-ink: #e8e9eb;
+  --color-muted: #9399a1;
+  --color-faint: #767c84;
+  --color-accent: #d2f34c;
+  --color-accent-soft: #d2f34c1f;
+  --color-accent-ink: #0b0c0e;
+  --color-ok: #5fd39a;
+  --color-warn: #f2b84b;
+  --color-bad: #ff6f61;
+  --color-steer: #6cc6e3;
+
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --radius-ctl: 3px;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --animate-pulse-dot: pulse-dot 1.4s var(--ease-in-out) infinite;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    background: var(--color-ground);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Numbers line up in every table, readout and axis. */
+  table,
+  dd,
+  output,
+  time,
+  data {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Pressable controls give under the hand (Emil Kowalski: scale 0.97, 160 ms, strong ease-out). */
+  .press {
+    transition:
+      transform 160ms var(--ease-out),
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease;
+  }
+  .press:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: 2.25rem;
+    padding: 0 0.875rem;
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-ctl);
+    background: var(--color-panel);
+    color: var(--color-ink);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--color-raised);
+    border-color: var(--color-faint);
+  }
+  .btn-secondary:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  /* Small uppercase field label for data (dt, column heads); not used above section titles. */
+  .label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--color-raised) 0%,
+      var(--color-line) 50%,
+      var(--color-raised) 100%
+    );
+    background-size: 200% 100%;
+    border-radius: var(--radius-ctl);
+  }
+
+  /* Content that replaces a skeleton fades in instead of popping (prevents a jarring swap). */
+  .arrive {
+    transition: opacity 220ms var(--ease-out);
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
+  /* The scrubber: a native range input, restyled; its filled part is drawn by a sibling. */
+  .scrubber {
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+  .scrubber::-webkit-slider-runnable-track {
+    height: 4px;
+    background: transparent;
+  }
+  .scrubber::-moz-range-track {
+    height: 4px;
+    background: transparent;
+  }
+  .scrubber::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border-radius: 2px;
+    background: var(--color-ink);
+    border: 2px solid var(--color-ground);
+    transition: transform 160ms var(--ease-out);
+  }
+  .scrubber::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--color-ink);
+    border: 2px solid var(--color-ground);
+  }
+  .scrubber:active::-webkit-slider-thumb {
+    transform: scale(1.15);
+  }
+  .scrubber:focus-visible {
+    outline: none;
+  }
+  .scrubber:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .scrubber:focus-visible::-moz-range-thumb {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Fewer and gentler: drop transform motion and loops, keep colour and opacity changes. */
+  .press:active:not(:disabled) {
+    transform: none;
+  }
+  .scrubber:active::-webkit-slider-thumb {
+    transform: none;
+  }
+}
