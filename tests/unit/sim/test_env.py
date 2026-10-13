@@ -12,7 +12,7 @@ import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from lapzero.contract import SIM_DT, STEER_MAX, STEER_RATE_MAX, V_MAX_TRAIN
+from lapzero.contract import SIM_DT, STEER_MAX, STEER_RATE_MAX, V_LAT, V_MAX_TRAIN, VY_NORM
 from lapzero.sim.env import (
     EnvConfig,
     LapZeroEnv,
@@ -278,6 +278,22 @@ def test_friction_range_keeps_the_seeds_start_jitter_and_the_info_keys() -> None
     _, info = LapZeroEnv(randomized, START_POSE, config=config).reset(seed=4)
     assert randomized.reset_poses == plain.reset_poses
     assert set(info) == INFO_KEYS
+
+
+def test_v_lat_is_the_latest_raw_lateral_speed_beyond_the_observation_clip(
+    make_env: EnvFactory, fake_sim: FakeSimulator
+) -> None:
+    env = make_env()
+    env.reset(seed=0)
+    fake_sim.v_lat = -2.5 * VY_NORM
+    obs, *_ = env.step(COAST)
+    assert env.v_lat == -2.5 * VY_NORM
+    assert obs[V_LAT] == -1.0
+
+
+def test_v_lat_before_reset_raises(make_env: EnvFactory) -> None:
+    with pytest.raises(RuntimeError, match="reset"):
+        _ = make_env().v_lat
 
 
 def test_close_closes_the_simulator(make_env: EnvFactory, fake_sim: FakeSimulator) -> None:

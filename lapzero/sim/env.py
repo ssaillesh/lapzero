@@ -356,6 +356,20 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         return self._sim.friction
 
     @property
+    def v_lat(self) -> float:
+        """Car-frame lateral speed (y left) of the latest reading, m/s, raw and unclipped.
+
+        Kept out of the info dict, whose keys are fixed by contract Section 4; the observation
+        holds it normalized and clipped to +/-VY_NORM.
+
+        Raises:
+            RuntimeError: If called before reset().
+        """
+        if self._state is None:
+            raise RuntimeError("call reset() before reading v_lat")
+        return self._state.v_lat
+
+    @property
     def centreline(self) -> Centreline | None:
         """Centreline that info["progress"] is measured along, or None (progress stays 0.0)."""
         return self._centreline
