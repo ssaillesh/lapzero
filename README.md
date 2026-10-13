@@ -6,45 +6,56 @@
 [![State-space contract v1.1.0](https://img.shields.io/badge/state--space_contract-v1.1.0-6f42c1)](docs/contracts/state_space.md)
 [![mypy strict](https://img.shields.io/badge/mypy-strict-2a6db2)](pyproject.toml)
 [![ruff](https://img.shields.io/badge/lint-ruff-261230)](pyproject.toml)
-[![Tests: 820 passed (local run)](https://img.shields.io/badge/tests-820_passed_%28local_run%29-2ea44f)](#verification)
+[![Tests: 1,104 Python + 153 frontend passed (local run)](https://img.shields.io/badge/tests-1104_Python_%2B_153_frontend_passed_%28local_run%29-2ea44f)](#verification)
 [![Line coverage: 99% (local run)](https://img.shields.io/badge/coverage-99%25_%28local_run%29-2ea44f)](#verification)
 
 LapZero trains a driving policy in [F1TENTH Gym](https://github.com/f1tenth/f1tenth_gym). It starts with behaviour cloning on a handful of human laps, then fine-tunes with PPO across several tracks and randomized tyre friction. The goal is a policy that is fast at nominal grip and still finishes laps when grip drops. The engineering effort goes into proving that. A binding state-space contract defines what counts as a lap. A friction sweep measures every candidate the same way. A release gate decides promotion from two sweep reports. MLflow aliases only move when the evaluated versions are still the ones the registry points at.
 
 > **Headline result.** Champion **v8** completed **120 / 120** one-lap episodes on **Oschersleben**, a track it never trained on, across tyre friction μ = 0.50 to 1.05. At nominal grip it was **1.71 % faster** than the champion it replaced (45.98 s vs. 46.78 s). The release gate approved it, and the promotion recorded both sweep IDs on the model version. [Details and caveats ↓](#results-champion-v8-on-oschersleben)
 
-[Results](#results-champion-v8-on-oschersleben) · [Architecture](#architecture) · [Lap contract](#state-space-contract-v110-and-lap-validity) · [Domain randomization](#domain-randomization-and-robustness) · [Registry and release gate](#model-registry-and-release-gate) · [Inference](#inference-engine) · [Quickstart](#quickstart) · [Limitations](#limitations-and-reproducibility)
+[Demo](#demo) · [Dashboard](#dashboard) · [Results](#results-champion-v8-on-oschersleben) · [Architecture](#architecture) · [Lap contract](#state-space-contract-v110-and-lap-validity) · [Domain randomization](#domain-randomization-and-robustness) · [Registry and release gate](#model-registry-and-release-gate) · [Inference](#inference-engine) · [Quickstart](#quickstart) · [Limitations](#limitations-and-reproducibility)
 
 > [!NOTE]
-> The test and coverage badges are static. They record a local run on 2026-10-13 at commit `f230571` because the repository has no CI workflow yet. See [Verification](#verification) for the exact commands and results.
+> The test and coverage badges are static. They record a local run on 2026-10-14 at commit `9654899` because the repository has no CI workflow yet. See [Verification](#verification) for the exact commands and results.
 
 ---
 
 ## Demo
 
-<!--
-TODO(demo): add a verified Champion v8 domain-randomization lap, then replace the NOTE below with:
 <p align="center">
-  <img src="docs/assets/champion-v8-oschersleben-mu060.gif" width="760"
-       alt="Champion v8 completing a lap of Oschersleben at tyre friction mu 0.60">
+  <img src="docs/assets/champion-v8-oschersleben-mu060.gif" width="720"
+       alt="Champion v8 completing a lap of Oschersleben at tyre friction mu 0.60, played at 4x speed">
 </p>
--->
 
-> [!NOTE]
-> **Demo recording pending.** No lap GIF or video is committed yet. Every number in this README comes from stored evaluation reports and a re-run of the gate, not from a recording.
+Champion **v8** drives one counted lap of **Oschersleben**, a track no LapZero model trained on, at tyre friction **μ = 0.60**, the lower end of the release gate's robustness range. The lap takes **46.24 s**, and the GIF plays it at 4× speed. The orange line is the path the car drove; the blue dot is the car, with a tick showing its heading.
 
-<details>
-<summary>Recording spec for the demo GIF</summary>
+This is not a screen recording of the simulator. The GIF animates the per-step trace that the gate's sweep stored for this episode (sweep `01M4TH84XCQYGAD34XR0C5BTDH`, file `mu_0.6/seed_0.csv`, from a jittered start pose) over the track's occupancy map. A one-off Pillow script, not included in this repository, drew it. All 10 episodes at this friction level completed, in 46.08 to 46.32 s. Track map: [f1tenth/f1tenth_racetracks](https://github.com/f1tenth/f1tenth_racetracks), GPL-3.0.
 
-- **File:** `docs/assets/champion-v8-oschersleben-mu060.gif`
-- **Content:** the registry `champion` (version 8) driving one full counted lap of Oschersleben at reduced grip, preferably μ = 0.60 (the bottom of the gate's robustness range). Show the start, the whole lap and the completion. Overlay μ, speed and lap time if possible.
-- **Visibility:** keep the whole track in frame, or follow the car with the driven line visible, so viewers can read the line, the car's behaviour in corners and the lap completion.
-- **Encoding:** 25 to 30 fps (the policy acts at 25 Hz), at most 760 px wide, ideally under about 8 MB. A lap takes about 46 s, so speed it up 2 to 4 times and say so in the caption, or link an MP4 instead.
-- **How:** no script renders a model lap yet. There are two options:
-  - Build `F1TenthSimulator(map_yaml, seed=0, render=True)` with `LapZeroEnv(..., config=EnvConfig(friction_range=(0.6, 0.6)), centreline=...)`, call `simulator.render()` every step and screen-record the window. F1TENTH draws the world mirrored; see `RENDER_MIRRORED` in [`lapzero/sim/f1tenth.py`](lapzero/sim/f1tenth.py).
-  - Animate a trace that `scripts/eval_sweep.py` already writes (`mu_<mu>/seed_<n>.csv`, columns `t,x,y,theta,v_long,steer,throttle,steer_rad,v_target,progress,cte_m,collision`) over the track's map image.
+### Dashboard
 
-</details>
+A FastAPI backend stores uploaded laps in PostgreSQL, and a React dashboard shows them. See [Run the dashboard](#5-run-the-dashboard) to start it locally.
+
+<p align="center">
+  <img src="docs/assets/dashboard-track-explorer.png" width="900"
+       alt="Track Explorer replaying champion v8's 51.60 s lap of Spielberg, paused at 31 s, with a telemetry readout">
+</p>
+
+**Track Explorer.** Champion v8's lap of Spielberg (51.60 s) replayed on the track and paused at 31 s. The driven line is coloured by speed, and the readout below the map follows the replay.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/dashboard-leaderboard.png"
+         alt="Spielberg leaderboard: champion v8 at 51.60 s, then the best human lap at 1:17.20"></td>
+    <td width="50%"><img src="docs/assets/dashboard-governance.png"
+         alt="Governance page: champion v8 with its release-gate record"></td>
+  </tr>
+  <tr>
+    <td><b>Leaderboard.</b> Each driver's fastest completed lap on a track. On Spielberg, champion v8 (51.60 s) leads the best human lap (1:17.20).</td>
+    <td><b>Governance.</b> The registry's champion and the release-gate evidence tagged on it: the verdict, the gate track, the version it replaced and both sweep IDs.</td>
+  </tr>
+</table>
+
+The screenshots come from the local stack on 2026-10-14, with the API reading this repository's MLflow registry. Every lap shown is a real upload: human laps recorded with `scripts/drive.py`, and champion laps driven by `scripts/eval_rollout.py`.
 
 ---
 
@@ -59,7 +70,8 @@ TODO(demo): add a verified Champion v8 domain-randomization lap, then replace th
 | Governance | Promotion refuses if either alias moved after its sweep; evidence is tagged on the new champion | [`registry.py`](lapzero/registry.py) |
 | Reproducibility | Every run logs all contract constants, hyperparameters, seed, track IDs and git commit | [`training/tracking.py`](lapzero/training/tracking.py) |
 | Typed I/O | Frozen Pydantic models reject NaN, inf and unknown fields | [`inference/schemas.py`](lapzero/inference/schemas.py), [`io/telemetry.py`](lapzero/io/telemetry.py) |
-| Quality bar | 820 tests (24 property-based), 99 % line coverage, `mypy --strict`, ruff | [`tests/`](tests) |
+| Dashboard | Uploaded laps are validated against the contract, stored in PostgreSQL and served to a leaderboard, a replay viewer and a governance page | [`backend/app/`](backend/app), [`frontend/`](frontend) |
+| Quality bar | 1,104 Python tests (25 property-based) and 153 frontend tests, 99 % line coverage, `mypy --strict`, ruff, strict TypeScript and ESLint | [`tests/`](tests), [`frontend/src/`](frontend/src) |
 
 ---
 
@@ -163,6 +175,12 @@ flowchart LR
         SCHEMAS["lapzero.inference.schemas<br/>StepTelemetry, EpisodeResult"]
     end
 
+    subgraph SERVE["Dashboard"]
+        ROLLOUT["scripts/eval_rollout.py<br/>champion lap upload"]
+        API["backend/app<br/>FastAPI + PostgreSQL"]
+        UI["frontend<br/>React dashboard"]
+    end
+
     LAPS[("data/laps<br/>JSON + npz")]
     REG[("MLflow registry<br/>lapzero-policy<br/>champion / challenger")]
 
@@ -180,6 +198,12 @@ flowchart LR
     REG -- "load" --> ENGINE
     ENGINE --> ENV
     ENGINE --> SCHEMAS
+    REG -- "load champion" --> ROLLOUT
+    ROLLOUT --> ENV
+    LAPS -- "POST /api/laps" --> API
+    ROLLOUT -- "POST /api/laps" --> API
+    REG -- "champion alias" --> API
+    API -- "REST" --> UI
 ```
 
 Every box above imports its constants from [`lapzero/contract.py`](lapzero/contract.py), the only place contract values are defined.
@@ -190,17 +214,19 @@ Every box above imports its constants from [`lapzero/contract.py`](lapzero/contr
 | Shared | [`lapzero/sim/`](lapzero/sim) | `LapZeroEnv` maps policy actions in [−1, 1] to steering (rad) and target velocity (m/s), builds observations, counts laps and draws friction | `LapZeroEnv` is the only caller of `Simulator.step`. `f1tenth.py` is the only module that imports `f1tenth_gym` and checks the simulator's built-in values against the contract on startup. Unit tests swap in a `FakeSimulator` through the `Simulator` protocol |
 | Data | [`lapzero/record/`](lapzero/record), [`lapzero/io/`](lapzero/io) | The human driver emits the same action space as models. The recorder writes validated lap telemetry JSON plus an `.npz` of observations and actions | `lapzero.io` never imports `sim` or `training` |
 | Training | [`lapzero/training/`](lapzero/training) | BC on completed human laps, PPO fine-tuning, MLflow params, metrics and model registration | Reads laps and a local `.pt` warm start. Writes to MLflow |
-| Evaluation | [`lapzero/eval/`](lapzero/eval) | Deterministic one-lap rollouts, friction sweeps, per-episode CSV traces, the gate decision | The gate reads only `sweep.json` files. It never runs the simulator or touches the registry |
+| Evaluation | [`lapzero/eval/`](lapzero/eval) | Deterministic one-lap rollouts, friction sweeps, per-episode CSV traces, the gate decision, and the champion lap that `rollout.py` records and uploads to the API | The gate reads only `sweep.json` files. It never runs the simulator or touches the registry |
 | Release | [`lapzero/registry.py`](lapzero/registry.py) | Moves `champion` to the evaluated challenger and tags the evidence | Only called by `scripts/eval_gate.py --promote` after a PROMOTE verdict |
 | Inference | [`lapzero/inference/`](lapzero/inference) | Loads a policy and drives it step by step, streaming typed telemetry | See [Inference engine](#inference-engine) for exactly what it depends on |
+| Backend | [`backend/app/`](backend/app) | `POST /api/laps` validates telemetry with the contract's Pydantic models, refuses another contract major version, then stores the lap, its file and a 10 Hz replay. Read endpoints serve tracks, leaderboards, replays and the registry's champion | Imports only `lapzero.contract` and `lapzero.io`, never `sim` or `training`. Schema changes go through Alembic |
+| Dashboard | [`frontend/`](frontend) | Leaderboard, Track Explorer (canvas replay with telemetry) and governance views | Talks only to the API, through one client that decodes every response |
 
-Training, evaluation and inference do not share a process or talk to each other directly. They communicate through files (`data/laps/`, `models/*.pt`, `sweep.json`) and the MLflow store under `mlruns/`.
+Training, evaluation and inference do not share a process or talk to each other directly. They communicate through files (`data/laps/`, `models/*.pt`, `sweep.json`) and the MLflow store under `mlruns/`. The dashboard sees only what reaches the API: laps uploaded to `POST /api/laps`, and the champion alias read from the registry.
 
 ---
 
 ## State-space contract v1.1.0 and lap validity
 
-[`docs/contracts/state_space.md`](docs/contracts/state_space.md) is the binding interface between the simulator, the learning code and any consumer of telemetry. [`lapzero/contract.py`](lapzero/contract.py) implements it (`CONTRACT_VERSION = "1.1.0"`), and 87 tests in [`tests/contracts/`](tests/contracts) lock it.
+[`docs/contracts/state_space.md`](docs/contracts/state_space.md) is the binding interface between the simulator, the learning code and any consumer of telemetry. [`lapzero/contract.py`](lapzero/contract.py) implements it (`CONTRACT_VERSION = "1.1.0"`), and 159 tests in [`tests/contracts/`](tests/contracts) lock it.
 
 | | Definition |
 |---|---|
@@ -357,16 +383,17 @@ scripts/setup_dev.sh   # uv sync --all-groups, then checks a fresh interpreter c
 ### 2. Check the code
 
 ```bash
-uv run pytest tests/unit                                   # 709 unit tests, no simulator
-uv run pytest tests/contracts                              # 87 contract tests
-uv run pytest -m integration                               # 24 tests on the real F1TENTH simulator
-uv run pytest                                              # everything (820 tests)
-uv run pytest -m "not integration" --cov=lapzero --cov-report=term-missing
-uv run mypy --strict lapzero scripts
+uv run pytest tests/unit                                   # 920 unit tests, no simulator or database
+uv run pytest tests/contracts                              # 159 contract tests
+uv run pytest -m integration                               # 32 tests: F1TENTH, MLflow and PostgreSQL
+uv run pytest                                              # everything (1,111 tests)
+uv run pytest -m "not integration" --cov=lapzero --cov=backend/app --cov-report=term-missing
+uv run mypy --strict lapzero backend/app scripts
 uv run ruff check . && uv run ruff format --check .
+cd frontend && npm run lint && npm run typecheck && npm test   # 153 frontend tests
 ```
 
-Integration tests build their own small maps and temporary MLflow stores, so they need no track data and leave `mlruns/` alone.
+Integration tests build their own small maps and temporary MLflow stores, so they need no track data and leave `mlruns/` alone. The 7 PostgreSQL tests in `tests/integration/backend/` also need the compose database (`docker compose up -d db`) and `DATABASE_URL` from `.env`; they create and drop their own throwaway databases.
 
 ### 3. Get the tracks
 
@@ -420,19 +447,50 @@ uv run python scripts/eval_gate.py \
 
 Run every command from the repo root so that all scripts resolve the same `./mlruns` store. Every `PPOConfig` and `RewardConfig` field is also a flag (for example `--learning-rate` or `--collision-penalty`); run any script with `--help` to list them. A refused comparison, such as a contract-major mismatch, raises an exception, which also exits non-zero. LapZero depends on `mlflow-skinny`, which has the client but no UI server.
 
+### 5. Run the dashboard
+
+```bash
+cp .env.example .env              # once; set POSTGRES_PASSWORD and DATABASE_URL
+docker compose up -d db
+uv run alembic -c backend/alembic.ini upgrade head
+TRACKS_DIR=data/tracks uv run uvicorn backend.app.main:app --port 8000
+
+cd frontend && npm install && npm run dev   # http://localhost:5173
+```
+
+`TRACKS_DIR=data/tracks` lets the API serve the track outlines from the files fetched in step 3. A track appears in the dashboard once it has its first lap. To add laps, with the API running:
+
+```bash
+# The registry champion drives one lap from the fixed start pose and uploads it
+uv run python scripts/eval_rollout.py --track spielberg
+uv run python scripts/eval_rollout.py --track moscowraceway
+
+# Upload recorded human laps (a lap already uploaded answers 409)
+for f in data/laps/spielberg/*.json; do
+  curl -sS -o /dev/null -w "%{http_code} $f\n" -X POST \
+    -H "Content-Type: application/json" --data @"$f" http://localhost:8000/api/laps
+done
+```
+
+`eval_rollout.py` resolves `lapzero-policy@champion` to a version once and loads exactly that version, so the uploaded lap names the weights that drove it. It drives at the simulator's default friction, as human laps are recorded. The lap is written to `data/laps/<track>/` like any recorded lap, then POSTed; crashed or timed-out laps are uploaded with their status. The script exits 1 if the API does not answer 201. Use `--api` to target another API.
+
+The dashboard hides two tracks that exist in the local data, listed in [`frontend/src/lib/tracks.ts`](frontend/src/lib/tracks.ts): `spielberg_wide` (human laps on a widened copy of the Spielberg map; see [Limitations](#limitations-and-reproducibility)) and `oval` (an early test loop on which every lap crashed). [`frontend/README.md`](frontend/README.md) covers the dashboard's configuration, checks and API usage.
+
 ### Verification
 
-Results from preparing this README on 2026-10-13, at commit `f230571` with a clean working tree:
+Results from updating this README on 2026-10-14, at commit `9654899`. The working tree differed only in `README.md` and `docs/assets/`.
 
 | Check | Command | Result |
 |---|---|---|
-| Lint and format | `ruff check .` and `ruff format --check .` | Passed, 98 files formatted |
-| Types | `mypy --strict lapzero scripts` | No issues in 42 source files |
-| Unit + contract | `pytest -m "not integration" --cov=lapzero` | 796 passed. 99 % line coverage (2,235 statements, 18 missed, all in `sim/f1tenth.py` and `training/vec_env.py`, which only the integration tests exercise) |
-| Contract only | `pytest tests/contracts` | 87 passed |
-| Integration | `pytest -m integration` | 24 passed in 53 s |
+| Lint and format | `ruff check .` and `ruff format --check .` | Passed, 169 files formatted |
+| Types | `mypy --strict lapzero backend/app scripts` | No issues in 73 source files |
+| Unit + contract | `pytest -m "not integration" --cov=lapzero --cov=backend/app` | 1,079 passed. 99 % line coverage (2,948 statements, 32 missed, all in `sim/f1tenth.py` and `training/vec_env.py`, which only the integration tests exercise) |
+| Contract only | `pytest tests/contracts` | 159 passed |
+| Integration | `pytest -m integration` | 25 passed in 64 s. The 7 PostgreSQL tests were not run: no compose database was up, so they stopped at connecting |
+| Frontend | `npm run lint`, `npm run typecheck` and `npm test` in `frontend/` | Passed; 153 tests in 19 files |
 | Gate replay | `scripts/eval_gate.py` on the stored v5 and v8 sweeps, dry run | PROMOTE, −1.71 %, exit 0 |
 | Inference example | The snippet in [Inference engine](#inference-engine) | Completed lap, 46.16 s at μ 0.60 |
+| Dashboard upload | `scripts/eval_rollout.py --track spielberg`, then `--track moscowraceway` | Both laps completed (51.60 s and 58.72 s), and the API stored them (201) |
 
 ---
 
@@ -463,24 +521,35 @@ lapzero/
 │   │   ├── sweep.py                # friction sweep and the sweep.json schema
 │   │   ├── gate.py                 # release gate: pure decide()
 │   │   ├── export.py               # summary.json and per-episode CSV traces
-│   │   └── perturb.py              # evaluation-only observation noise
+│   │   ├── perturb.py              # evaluation-only observation noise
+│   │   └── rollout.py              # champion lap on a track, recorded and POSTed to the API
 │   ├── inference/
 │   │   ├── engine.py               # InferenceEngine
 │   │   └── schemas.py              # StepTelemetry, EpisodeResult (no sim/training imports)
 │   ├── record/                     # human driver, pygame input, lap recorder, session loop, ULIDs
-│   └── io/                         # lap telemetry models and .npz reader (no sim/training imports)
+│   └── io/                         # telemetry, replay, centreline, .npz reader (no sim/training imports)
+├── backend/
+│   ├── app/                        # FastAPI: routers, services, SQLAlchemy models, settings
+│   └── alembic/                    # database migrations
+├── frontend/                       # React dashboard: leaderboard, Track Explorer, governance
+├── schemas/                        # JSON Schemas for lap telemetry and replays
 ├── scripts/                        # thin CLIs over lapzero/
 │   ├── drive.py                    # record human laps
 │   ├── train_bc.py, train_ppo.py   # training entry points
 │   ├── eval.py                     # single-track evaluation with optional noise and friction
 │   ├── eval_sweep.py               # friction sweep → sweep.json
 │   ├── eval_gate.py                # release gate and optional promotion
+│   ├── eval_rollout.py             # drive the champion one lap and upload it to the API
+│   ├── check_sim_params.py         # check the simulator's values against the contract
 │   └── setup_dev.sh                # uv sync and import check
 ├── tests/
-│   ├── contracts/                  # 87 tests that lock docs/contracts/state_space.md
-│   ├── unit/                       # 709 tests mirroring lapzero/, run against FakeSimulator
-│   └── integration/                # 24 tests on real F1TENTH Gym and temporary MLflow stores
-├── docs/contracts/state_space.md   # binding state-space contract
+│   ├── contracts/                  # 159 tests that lock docs/contracts/state_space.md
+│   ├── unit/                       # 920 tests mirroring lapzero/ and backend/app/, no simulator
+│   └── integration/                # 32 tests on real F1TENTH Gym, MLflow stores and PostgreSQL
+├── docs/
+│   ├── contracts/state_space.md    # binding state-space contract
+│   └── assets/                     # demo GIF and dashboard screenshots
+├── docker-compose.yml, .env.example  # local PostgreSQL and backend settings
 ├── pyproject.toml, uv.lock         # dependencies, ruff, mypy, pytest config
 └── data/, mlruns/, models/         # local only (gitignored): tracks, laps, sweeps, registry, weights
 ```
@@ -496,7 +565,7 @@ lapzero/
 - **Version-guarded aliases.** The gate's verdict applies to specific versions. Checking that both aliases still point at the swept versions turns a race between training and promotion into an error instead of a silent promotion of an unevaluated model.
 - **A BC warm start that PPO cannot immediately wreck.** The PPO actor copies the BC network's layers and puts tanh on the action mean, so the starting deterministic policy is exactly the BC policy. Before the actor may change, a critic warm-up of 5 rollouts trains the value function with the actor frozen. A small action noise (`log_std_init=-1`), a low learning rate (3e-5), clip 0.1 and a KL cap of 0.02 keep early updates close to the BC policy. The fine-tuned actor is exported back to the BC checkpoint format, so every model loads the same way.
 - **Typed telemetry with cross-field invariants.** Range checks alone would accept a frame claiming a completed lap with zero laps counted, or a lap time longer than the episode. The validators reject these at the I/O boundary rather than leaving every consumer to re-check them.
-- **A simulator protocol for testability.** Because `LapZeroEnv` depends on a `Simulator` protocol rather than on F1TENTH, 796 tests run in about 20 s with a scripted fake. That includes property-based tests that feed NaN, inf and out-of-range values through the observation and action mappings.
+- **A simulator protocol for testability.** Because `LapZeroEnv` depends on a `Simulator` protocol rather than on F1TENTH, the 1,079 unit and contract tests run in about 30 s with a scripted fake. That includes property-based tests that feed NaN, inf and out-of-range values through the observation and action mappings.
 
 ---
 
@@ -506,7 +575,7 @@ lapzero/
 - **Narrow evidence.** The gate result covers one held-out track, 12 friction levels and 10 start poses per level, with a deterministic policy. 100 / 100 is consistent with a true completion rate as low as about 96 % (exact binomial 95 % bound). The episodes share seeds and a simulator, so they are not fully independent draws.
 - **Single training seed.** Each configuration in [How v8 got there](#how-v8-got-there) was trained once (seed 0). Within v8's own run, held-out robustness ranged from 13 / 100 to 100 / 100 across checkpoints, so v8's result may not be stable across seeds.
 - **Speed-capped.** Policies run under the contract's 8 m/s target-velocity cap, which v8 reaches. The pace comparisons are between speed-capped policies.
-- **Limited human data.** The BC policy behind v5 and v8 was trained on 5 completed human laps recorded on Spielberg (lap track IDs `spielberg` and `spielberg_wide`; 4 for training, 1 for validation).
+- **Limited human data.** The BC policy behind v5 and v8 was trained on 5 completed human laps recorded on Spielberg (lap track IDs `spielberg` and `spielberg_wide`; 4 for training, 1 for validation). The 2 `spielberg_wide` laps were driven on a widened copy of the Spielberg map that is no longer in `data/tracks`: their positions go up to 0.72 m beyond the real track's edges, which are 1.10 m either side of the centreline. They stay in the data as training provenance, and the dashboard hides that track because their times are not comparable with laps on the real track.
 - **Provenance.** The v8 training run and both gate sweeps record `git_commit d672439…-dirty`, meaning they ran on uncommitted changes that were committed later. v6 and v7 were swept with contract v1.0.0 evaluation code (marked † above). The gate re-run in this README uses the current code on the stored sweeps.
 - **Artifacts are not in git.** Model weights, `mlruns/`, recorded laps, sweeps and the GPL-3.0 tracks are gitignored. Reproducing the exact numbers needs the local registry, or retraining with the commands above, which will not be bit-identical.
 - **Hardware.** Training runs on CPU by design (`device="cpu"`, for reproducibility). v8's 1 M steps on 2 tracks took about 16 minutes (977 s at about 1,000 steps per second) on the author's Mac.
@@ -517,12 +586,13 @@ lapzero/
 
 Planned in the project instructions and the contract, but **not implemented in this repository yet**:
 
-- FastAPI backend with PostgreSQL for laps, replays and model history, and a React dashboard with ghost-lap replay (contract Section 6)
 - GitHub Actions for CI and for running the release gate (`ci.yml`, `release-gate.yml`)
-- JSON Schema files under `schemas/` and their contract tests (`test_telemetry_schema.py`, `test_replay_schema.py`)
-- `scripts/check_sim_params.py`. Until it exists, `verify_baseline` performs the same check every time the simulator starts
-- SAC as a second RL algorithm, and a demo recording (see [Demo](#demo))
+- SAC as a second RL algorithm
+- A hosted deployment of the API and dashboard
+- A script in the repository that renders demo GIFs from sweep traces (the [Demo](#demo) GIF was drawn by a one-off script)
 
 ## Stack
 
 Python 3.11 · F1TENTH Gym (git `5a301bd`) · Gymnasium 0.29.1 · Stable-Baselines3 2.9.0 · PyTorch 2.14.1 · MLflow (skinny) 3.17.0 · Pydantic 2.14.1 · NumPy 2.4.6. Development tools: pytest, pytest-cov, Hypothesis, mypy, ruff. Versions are those resolved in [`uv.lock`](uv.lock).
+
+Backend: FastAPI 0.143.0 · SQLAlchemy 2.1.4 · Alembic 1.20.0 · psycopg 3.3.6 · Uvicorn 0.54.0 · PostgreSQL 17 (Docker Compose). Dashboard: React 19.3.0 · Vite 8.3.4 · TypeScript 6.0.3 · Tailwind CSS 4.3.3 · Recharts 3.10.1, tested with Vitest 5.0.4 and React Testing Library. Dashboard versions are those resolved in [`frontend/package-lock.json`](frontend/package-lock.json).
