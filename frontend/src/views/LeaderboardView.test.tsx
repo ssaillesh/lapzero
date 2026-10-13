@@ -19,6 +19,9 @@ function mockApi() {
 
 const params = { trackId: "spielberg", driverType: null, limit: 25 } as const;
 
+/** A track the dashboard hides (lib/tracks), as the API would list it. */
+const WIDE = { ...TRACKS[1]!, track_id: "spielberg_wide", name: "spielberg_wide" };
+
 function bodyRows() {
   const table = screen.getByRole("table");
   return within(table).getAllByRole("row").slice(1);
@@ -149,5 +152,29 @@ describe("LeaderboardView", () => {
     vi.spyOn(api, "getChampion").mockResolvedValue(champion());
     renderWithProviders(<LeaderboardView params={{ ...params, trackId: null }} />);
     expect(await screen.findByText("No tracks yet")).toBeInTheDocument();
+  });
+
+  it("never offers a hidden track", async () => {
+    mockApi();
+    vi.spyOn(api, "listTracks").mockResolvedValue([...TRACKS, WIDE]);
+    renderWithProviders(<LeaderboardView params={params} />);
+    const select = await screen.findByLabelText("Track");
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["oschersleben", "spielberg"]);
+  });
+
+  it("shows no board for a hidden track named in the URL", async () => {
+    const getLeaderboard = mockApi();
+    vi.spyOn(api, "listTracks").mockResolvedValue([...TRACKS, WIDE]);
+    renderWithProviders(<LeaderboardView params={{ ...params, trackId: "spielberg_wide" }} />);
+    expect(await screen.findByText(`No track "spielberg_wide"`)).toBeInTheDocument();
+    expect(getLeaderboard).not.toHaveBeenCalledWith(
+      "spielberg_wide",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

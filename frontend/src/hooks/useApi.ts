@@ -13,6 +13,7 @@ import type {
   TrackDetail,
   TrackSummary,
 } from "../api/types";
+import { visibleTracks } from "../lib/tracks";
 import { createResourceCache, useResource } from "./useResource";
 import type { Resource } from "./useResource";
 
@@ -28,8 +29,11 @@ export function clearApiCaches(): void {
     cache.clear();
 }
 
+/** Every track the dashboard shows: the API's list without the hidden tracks (lib/tracks). */
 export function useTrackList(): Resource<TrackSummary[]> {
-  return useResource(trackListCache, "tracks", (signal) => api.listTracks({ signal }));
+  return useResource(trackListCache, "tracks", (signal) =>
+    api.listTracks({ signal }).then((tracks) => visibleTracks(tracks)),
+  );
 }
 
 export function useTrack(trackId: string | null): Resource<TrackDetail> {

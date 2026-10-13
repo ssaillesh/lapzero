@@ -25,6 +25,7 @@ import type { Resource } from "../hooks/useResource";
 import { isChampion } from "../lib/champion";
 import { formatDateTime, formatLapTime, formatLength } from "../lib/formatters";
 import { hrefFor, navigate } from "../lib/router";
+import { isHiddenTrack } from "../lib/tracks";
 
 /** /tracks: open the first track, or explain why there is none. */
 export function TrackIndexView() {
@@ -56,10 +57,16 @@ export function TrackIndexView() {
 
 /** /tracks/:trackId and /tracks/:trackId/replays/:lapId. */
 export function TrackViewerView({ trackId, lapId }: { trackId: string; lapId: string | null }) {
+  // A hidden track is never shown, even from a direct URL: open the first visible track instead.
+  const hidden = isHiddenTrack(trackId);
+  useEffect(() => {
+    if (hidden) navigate(hrefFor({ name: "tracks" }), { replace: true });
+  }, [hidden]);
+
   const tracks = useTrackList();
-  const track = useTrack(trackId);
-  const laps = useLeaderboard(trackId, null, LEADERBOARD_MAX_LIMIT);
-  const replay = useReplay(lapId);
+  const track = useTrack(hidden ? null : trackId);
+  const laps = useLeaderboard(hidden ? null : trackId, null, LEADERBOARD_MAX_LIMIT);
+  const replay = useReplay(hidden ? null : lapId);
   const champion = useChampion();
   const championData = champion.status === "success" ? champion.data : null;
 
@@ -84,6 +91,8 @@ export function TrackViewerView({ trackId, lapId }: { trackId: string; lapId: st
       });
     }
   }, [trackId, lapId, replayTrack]);
+
+  if (hidden) return null;
 
   if (
     track.status === "error" &&
