@@ -6,7 +6,7 @@ Instructions for Claude when working in this repository. Read this file fully be
 
 ## 1. What this project is
 
-LapZero trains an AI race driver in the F1TENTH Gym simulator. It first copies human laps (behaviour cloning), then improves with reinforcement learning (PPO or SAC). A CI release gate promotes a new model only if it is faster **and** no less safe than the current champion. A FastAPI backend and React dashboard show lap times, a leaderboard, model history, and ghost-lap replays.
+LapZero trains an AI race driver in the F1TENTH Gym simulator. It first copies human laps (behaviour cloning), then improves with reinforcement learning (PPO or SAC). A CI release gate promotes a new model only if it stays robust across tyre grip **and** keeps pace with the current champion at nominal grip. A FastAPI backend and React dashboard show lap times, a leaderboard, model history, and ghost-lap replays.
 
 Source of truth documents, in priority order:
 
@@ -204,8 +204,8 @@ If something cannot pass (missing service, sim install issue), say exactly what 
 
 ### Release gate
 
-- Gate logic lives in `lapzero/eval/gate.py` as a pure function: inputs are two lists of eval results, output is a typed decision with reasons. The CI workflow only calls it.
-- Rules (from README): over 20 laps on 3 tracks, promote only if mean lap time is lower, crash rate is not higher, and at least one unseen track is fully completed. Changing these rules requires approval.
+- Gate logic lives in `lapzero/eval/gate.py` as a pure function: inputs are two friction sweep reports (`lapzero/eval/sweep.py`, written by `scripts/eval_sweep.py`), output is a typed decision with reasons. The CI workflow only calls it.
+- Rules (from README, robustness-aware promotion rule): both policies are swept on the same track with the same settings (mu 0.50 to 1.05 in 0.05 steps, 10 jittered-start episodes per level). Promote only if the challenger completes >= 98% of all episodes with mu in [0.60, 1.05] (pooled) **and** its mean lap time at nominal grip (mu 1.05) is at most 2.0% slower than the champion's. Changing these rules requires approval.
 - The gate refuses to compare models with different `contract_version` major numbers.
 
 ### Backend

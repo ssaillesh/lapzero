@@ -51,6 +51,7 @@ class FakeSimulator:
         self.v_lat = 0.0
         self.yaw_rate = 0.0
         self.lap_count = 0
+        self.friction = 1.0
         self.follow_target = True  # car reaches the commanded speed every physics step
         self.collision_at_step: int | None = None  # physics step (since reset) that collides
         self.rng: np.random.Generator | None = None
@@ -72,6 +73,9 @@ class FakeSimulator:
         if self.follow_target:
             self.v_long = v_target
         return self._reading()
+
+    def set_friction(self, mu: float) -> None:
+        self.friction = mu
 
     def close(self) -> None:
         self.closed = True

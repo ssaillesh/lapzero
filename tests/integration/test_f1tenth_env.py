@@ -13,7 +13,7 @@ import pytest
 from lapzero.io.telemetry import LapStatus, TrackDirection, TrackInfo
 from lapzero.record.recorder import LapRecorder
 from lapzero.sim.env import EnvConfig, LapZeroEnv
-from lapzero.sim.f1tenth import make_env
+from lapzero.sim.f1tenth import F1TenthSimulator, make_env
 from lapzero.sim.simulator import Pose
 from tests.conftest import HUMAN_DRIVER
 
@@ -108,3 +108,56 @@ def test_a_lap_after_a_reset_counts_from_zero_and_is_recorded(
     finally:
         env.close()
     assert statuses == [LapStatus.COMPLETED, LapStatus.COMPLETED]
+
+
+def _heading_change_in_a_full_left_turn(
+    room_map: Path, friction: float | None, config: EnvConfig | None = None
+) -> float:
+    """Accelerate straight for 35 control steps, steer full left for 12; return the turn, rad."""
+    simulator = F1TenthSimulator(room_map, seed=0, friction=friction)
+    env = LapZeroEnv(simulator, Pose(-8.0, -4.0, 0.0), config=config)
+    try:
+        env.reset(seed=0)
+        for _ in range(35):
+            *_, info = env.step(FULL_THROTTLE)
+        heading = info["theta"]
+        for _ in range(12):
+            *_, info = env.step(np.array([1.0, 0.0], dtype=np.float32))
+        assert not info["collision"]
+        return float(info["theta"] - heading)
+    finally:
+        env.close()
+
+
+def test_the_simulator_runs_with_the_requested_friction(room_map: Path) -> None:
+    simulator = F1TenthSimulator(room_map, seed=0, friction=0.3)
+    try:
+        assert simulator.friction == 0.3
+    finally:
+        simulator.close()
+
+
+def test_lower_friction_makes_the_car_understeer(room_map: Path) -> None:
+    grippy = _heading_change_in_a_full_left_turn(room_map, friction=None)
+    slippery = _heading_change_in_a_full_left_turn(room_map, friction=0.3)
+    assert slippery < grippy - 0.1  # measured: about 1.29 rad against 1.53 rad
+
+
+def test_set_friction_changes_the_friction_of_a_running_simulator(room_map: Path) -> None:
+    simulator = F1TenthSimulator(room_map, seed=0)
+    try:
+        simulator.set_friction(0.6)
+        assert simulator.friction == 0.6
+        with pytest.raises(ValueError, match="friction"):
+            simulator.set_friction(0.0)
+        assert simulator.friction == 0.6
+    finally:
+        simulator.close()
+
+
+def test_friction_drawn_on_reset_drives_like_a_simulator_built_with_it(room_map: Path) -> None:
+    built_with = _heading_change_in_a_full_left_turn(room_map, friction=0.3)
+    drawn = _heading_change_in_a_full_left_turn(
+        room_map, friction=None, config=EnvConfig(friction_range=(0.3, 0.3))
+    )
+    assert drawn == built_with

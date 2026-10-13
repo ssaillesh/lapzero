@@ -241,6 +241,45 @@ def test_randomized_start_stays_within_contract_offsets_and_is_reproducible(
         assert abs(pose.theta - START_POSE.theta) <= 0.1
 
 
+def test_without_a_friction_range_the_env_reports_the_simulators_own_friction(
+    make_env: EnvFactory, fake_sim: FakeSimulator
+) -> None:
+    fake_sim.friction = 0.8
+    env = make_env()
+    env.reset(seed=0)
+    env.reset()
+    assert fake_sim.friction == 0.8
+    assert env.friction == 0.8
+
+
+def test_friction_range_draws_a_new_friction_on_every_reset_reproducibly(
+    make_env: EnvFactory, fake_sim: FakeSimulator
+) -> None:
+    env = make_env(friction_range=(0.5, 1.05))
+    frictions = []
+    for seed in range(20):
+        env.reset(seed=seed)
+        frictions.append(env.friction)
+        assert fake_sim.friction == env.friction
+    unseeded = []
+    for _ in range(5):  # Gymnasium vector envs seed only the first reset
+        env.reset()
+        unseeded.append(env.friction)
+    env.reset(seed=3)
+    assert env.friction == frictions[3]
+    assert len(set(frictions + unseeded)) == 25
+    assert all(0.5 <= mu <= 1.05 for mu in frictions + unseeded)
+
+
+def test_friction_range_keeps_the_seeds_start_jitter_and_the_info_keys() -> None:
+    plain, randomized = FakeSimulator(), FakeSimulator()
+    LapZeroEnv(plain, START_POSE, config=EnvConfig(randomize_start=True)).reset(seed=4)
+    config = EnvConfig(randomize_start=True, friction_range=(0.5, 1.05))
+    _, info = LapZeroEnv(randomized, START_POSE, config=config).reset(seed=4)
+    assert randomized.reset_poses == plain.reset_poses
+    assert set(info) == INFO_KEYS
+
+
 def test_close_closes_the_simulator(make_env: EnvFactory, fake_sim: FakeSimulator) -> None:
     make_env().close()
     assert fake_sim.closed
@@ -295,6 +334,39 @@ def test_without_a_centreline_progress_stays_zero(fake_sim: FakeSimulator) -> No
     assert _progress_after_moving_to(env, fake_sim, 25.0, -3.0) == 0.0
 
 
+# Lap completion (contract Section 3; the edge cases are in tests/contracts/test_lap_completion.py)
+
+
+def test_without_a_centreline_every_lap_the_simulator_counts_is_a_lap(
+    fake_sim: FakeSimulator,
+) -> None:
+    env = LapZeroEnv(fake_sim, START_POSE)
+    env.reset(seed=0)
+    fake_sim.lap_count = 1
+    _, _, terminated, _, info = env.step(COAST)
+    assert terminated
+    assert info["lap_count"] == 1
+
+
+def test_each_lap_needs_its_own_90_percent_of_the_centreline(fake_sim: FakeSimulator) -> None:
+    config = EnvConfig(laps_per_episode=2)
+    env = LapZeroEnv(fake_sim, Pose(0.0, 0.0, 0.0), config=config, centreline=SQUARE)
+    env.reset(seed=0)
+    for x, y in [(5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (0.0, 5.0)]:  # round the 40 m square
+        _progress_after_moving_to(env, fake_sim, x, y)
+    fake_sim.lap_count = 1
+    _progress_after_moving_to(env, fake_sim, 0.0, 0.0)
+    fake_sim.lap_count = 2  # the simulator counts a second pass right after the first lap
+    _, _, terminated, _, info = env.step(COAST)
+    assert not terminated
+    assert info["lap_count"] == 1
+
+
+def test_the_env_exposes_the_config_it_runs_with(fake_sim: FakeSimulator) -> None:
+    config = EnvConfig(laps_per_episode=2, max_episode_s=30.0)
+    assert LapZeroEnv(fake_sim, START_POSE, config=config).config is config
+
+
 def test_the_env_exposes_the_centreline_it_measures_progress_along(
     fake_sim: FakeSimulator,
 ) -> None:
@@ -324,6 +396,10 @@ def test_progress_is_always_a_finite_lap_fraction(x: float, y: float) -> None:
         {"brake_step": math.nan},
         {"v_max": 0.0},
         {"v_max": 20.5},
+        {"friction_range": (0.0, 1.0)},
+        {"friction_range": (1.05, 0.5)},
+        {"friction_range": (0.5, math.inf)},
+        {"friction_range": (math.nan, 1.0)},
     ],
 )
 def test_env_config_rejects_invalid_values(overrides: dict[str, Any]) -> None:

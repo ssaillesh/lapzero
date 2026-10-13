@@ -1,6 +1,6 @@
 # State Space Contract
 
-**Contract version:** `1.0.0`
+**Contract version:** `1.1.0`
 **Status:** Draft, locked once `tests/contracts/` passes
 **Applies to:** `sim/` (env wrapper), `training/` (BC + RL), `eval/` (release gate), `backend/` (API + DB), `frontend/` (replay viewer)
 
@@ -188,7 +188,7 @@ Rewards are summed over the repeated sim steps.
 | Start | Fixed start pose per track from `tracks/<track_id>/start.yaml`; optional random offset `±0.3 m`, `±0.1 rad` in training only |
 | Terminated (`terminated=True`) | Collision, or `LAPS_PER_EPISODE` laps completed (default 1 for eval, 3 for training) |
 | Truncated (`truncated=True`) | `MAX_EPISODE_S = 120 s` reached, or car stuck (`v_long < 0.2 m/s` for 3 s) |
-| Lap completion | F1TENTH Gym `lap_counts` increment, after passing the start line in the correct direction |
+| Lap completion | The simulator reports a pass through the start line (F1TENTH Gym `lap_counts` increment) **and** the car has driven at least `LAP_MIN_PROGRESS = 0.90` of the centreline since reset or the previous lap, net of any distance driven backwards. A U-turn or spin back through the start line, or a lap driven the wrong way, is not a lap and does not end the episode. An env built without a centreline (human recording, unit tests) cannot measure progress and counts every simulator lap. |
 
 The reward function is **not** part of this contract (it will change often). It lives in `sim/reward.py` and its version is logged per run.
 
@@ -206,7 +206,7 @@ info = {
     "v_long": float,         # m/s (raw, not normalized)
     "steer_rad": float,      # applied steering, rad
     "v_target": float,       # commanded target velocity, m/s
-    "lap_count": int,
+    "lap_count": int,        # laps completed since reset (Section 3 lap completion rule)
     "lap_time": float,       # s, current lap so far
     "collision": bool,
     "progress": float,       # 0..1 along the track centreline
@@ -367,6 +367,10 @@ Semantic versioning on `contract_version`:
 
 Every trained model logs `contract_version` as an MLflow param. The release gate refuses to compare a challenger and champion with different major versions.
 
+| Version | Change |
+|---|---|
+| `1.1.0` | Lap completion (Section 3) needs `LAP_MIN_PROGRESS = 0.90` of the lap driven, net, before a start-line pass counts; `info["lap_count"]` (Section 4) counts only those laps. Before, any pass through F1TENTH's start gate counted, in either direction. |
+
 ---
 
 ## 8. Enforcement (tests that lock this contract)
@@ -383,6 +387,7 @@ All live in `tests/contracts/` and run in CI on every push.
 | `test_telemetry_schema.py` | Recorded lap validates against `schemas/lap_telemetry.schema.json`; all `frames` arrays equal length; no `NaN` |
 | `test_replay_schema.py` | Replay validates against `schemas/replay.schema.json`; `hz = 10` |
 | `test_human_model_parity.py` | Keyboard driver output passes the same action-space check as a model |
+| `test_lap_completion.py` | A full lap counts and ends a one-lap episode; a start-line pass before 90% of the lap, a U-turn or spin back through it, and a lap driven backwards do not |
 
 `scripts/check_sim_params.py` prints the installed F1TENTH Gym values for every row in the simulator baseline table and exits non-zero if any differ from this document.
 

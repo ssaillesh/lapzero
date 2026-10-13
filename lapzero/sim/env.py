@@ -26,6 +26,7 @@ from lapzero.contract import (
     ACT_LOW,
     ACTION_REPEAT,
     BRAKE_STEP,
+    LAP_MIN_PROGRESS,
     LAPS_PER_EPISODE_EVAL,
     MAX_EPISODE_S,
     OBS_DIM,
@@ -81,6 +82,9 @@ class EnvConfig:
         steer_rate_limit: Limit steering change to STEER_RATE_MAX rad per control step.
         randomize_start: Jitter the start pose by START_OFFSET_XY m and START_OFFSET_THETA rad
             (training only).
+        friction_range: (low, high) tyre-road friction coefficient mu (dimensionless) to draw
+            uniformly on every reset (domain randomization, training only), or None to leave
+            the simulator's friction alone. Not a contract value.
     """
 
     laps_per_episode: int = LAPS_PER_EPISODE_EVAL
@@ -90,6 +94,7 @@ class EnvConfig:
     brake_step: float = BRAKE_STEP
     steer_rate_limit: bool = True
     randomize_start: bool = False
+    friction_range: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if self.laps_per_episode < 1:
@@ -102,6 +107,13 @@ class EnvConfig:
                 raise ValueError(f"EnvConfig.{name} must be finite and > 0, got {value}")
         if not 0.0 < self.v_max <= SIM_V_MAX:
             raise ValueError(f"EnvConfig.v_max must be in (0, {SIM_V_MAX}] m/s, got {self.v_max}")
+        if self.friction_range is not None:
+            low, high = self.friction_range
+            if not (math.isfinite(low) and math.isfinite(high) and 0.0 < low <= high):
+                raise ValueError(
+                    "EnvConfig.friction_range must be finite with 0 < low <= high, "
+                    f"got {self.friction_range}"
+                )
 
 
 def _clip(value: float, low: float, high: float, nan_to: float) -> float:
@@ -189,6 +201,11 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
 
     Each step maps the action once, then runs ACTION_REPEAT physics steps (stopping early on a
     collision) and sums the per-physics-step rewards.
+
+    The env, not the simulator, decides when a lap is complete (contract Section 3): the
+    simulator's lap counter only marks a pass through the start line, and the pass counts as a
+    lap if the car has driven at least LAP_MIN_PROGRESS of the centreline since reset or the
+    previous lap, net of any distance driven backwards.
     """
 
     def __init__(
@@ -206,8 +223,9 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             start_pose: Fixed start pose for this track (from tracks/<track_id>/start.yaml).
             reward_fn: Per-physics-step reward; defaults to the 0.0 placeholder.
             config: Episode and action-mapping settings; defaults to the contract values.
-            centreline: Track centreline in driving order, for info["progress"]; without one
-                progress is always 0.0.
+            centreline: Track centreline in driving order, for info["progress"] and lap
+                completion; without one progress is always 0.0 and every lap the simulator
+                counts is a lap.
         """
         super().__init__()
         self.observation_space = spaces.Box(OBS_LOW, OBS_HIGH, shape=(OBS_DIM,), dtype=np.float32)
@@ -230,14 +248,19 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         self._stuck_steps = 0
         self._lap_count = 0
         self._lap_start_step = 0
+        self._sim_lap_count = 0
+        self._progress = 0.0
+        self._lap_progress = 0.0  # net lap fraction driven since reset or the last lap
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[NDArray[np.float32], dict[str, Any]]:
         """Start a new episode at the start pose (jittered if randomize_start is set).
 
+        With friction_range set, the episode's friction mu is drawn uniformly from it.
+
         Args:
-            seed: Seeds the start-pose jitter; logged when given.
+            seed: Seeds the start-pose jitter and friction draw; logged when given.
             options: Unused, accepted for the Gymnasium API.
 
         Returns:
@@ -251,6 +274,11 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             dx, dy = self.np_random.uniform(-START_OFFSET_XY, START_OFFSET_XY, size=2)
             dtheta = self.np_random.uniform(-START_OFFSET_THETA, START_OFFSET_THETA)
             pose = Pose(pose.x + float(dx), pose.y + float(dy), pose.theta + float(dtheta))
+        # Drawn after the jitter so a seed gives the same start pose with or without it.
+        if self._config.friction_range is not None:
+            mu = float(self.np_random.uniform(*self._config.friction_range))
+            self._sim.set_friction(mu)
+            logger.debug("LapZeroEnv episode friction mu=%.4f", mu)
         self._state = self._sim.reset(pose)
         self._done = False
         self._prev_action = np.zeros(ACT_DIM, dtype=np.float32)
@@ -258,8 +286,11 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         self._v_target = 0.0
         self._sim_steps = 0
         self._stuck_steps = 0
-        self._lap_count = self._state.lap_count
+        self._lap_count = 0
         self._lap_start_step = 0
+        self._sim_lap_count = self._state.lap_count
+        self._progress = self._progress_at(self._state.pose)
+        self._lap_progress = 0.0
         return build_observation(self._state, self._prev_action), self._info(self._state)
 
     def step(
@@ -299,10 +330,9 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         self._prev_action = act
         self._sim_steps += steps
         self._stuck_steps = self._stuck_steps + steps if state.v_long < STUCK_SPEED else 0
-        if state.lap_count > self._lap_count:
-            self._lap_count, self._lap_start_step = state.lap_count, self._sim_steps
+        self._update_laps(state)
 
-        terminated = state.collision or state.lap_count >= cfg.laps_per_episode
+        terminated = state.collision or self._lap_count >= cfg.laps_per_episode
         truncated = self._sim_steps >= self._max_steps or self._stuck_steps >= self._stuck_limit
         self._done = terminated or truncated
         obs = build_observation(state, self._prev_action)
@@ -313,11 +343,24 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         self._sim.close()
 
     @property
+    def config(self) -> EnvConfig:
+        """Episode and action-mapping settings the env runs with."""
+        return self._config
+
+    @property
+    def friction(self) -> float:
+        """Tyre-road friction coefficient mu of the current episode (dimensionless).
+
+        Kept out of the info dict, whose keys are fixed by contract Section 4.
+        """
+        return self._sim.friction
+
+    @property
     def centreline(self) -> Centreline | None:
         """Centreline that info["progress"] is measured along, or None (progress stays 0.0)."""
         return self._centreline
 
-    def _progress(self, pose: Pose) -> float:
+    def _progress_at(self, pose: Pose) -> float:
         """Fraction of a lap driven from the start line to `pose` along the centreline, in [0, 1].
 
         The car's position is projected onto the centreline; 0.0 is the start pose's
@@ -328,8 +371,39 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
         arc = self._centreline.project(pose.x, pose.y)
         return (arc - self._start_arc) / self._centreline.length % 1.0
 
+    def _update_laps(self, state: SimState) -> None:
+        """Track net progress and count a lap if the simulator reports a start-line pass.
+
+        F1TENTH counts any pass through a gate at the reset pose, in either direction, so a
+        U-turn or a spin back through the start would be a lap. A pass counts only once the car
+        has driven LAP_MIN_PROGRESS of the lap since reset or the previous lap, net of distance
+        driven backwards (contract Section 3). Without a centreline every pass counts.
+
+        Args:
+            state: Reading after the control step's last physics step.
+        """
+        progress = self._progress_at(state.pose)
+        self._lap_progress += (progress - self._progress + 0.5) % 1.0 - 0.5  # short way round
+        self._progress = progress
+        crossed, self._sim_lap_count = state.lap_count > self._sim_lap_count, state.lap_count
+        if not crossed:
+            return
+        if self._centreline is not None and self._lap_progress < LAP_MIN_PROGRESS:
+            logger.debug(
+                "start-line pass at t=%.2f s is not a lap: only %.1f%% of the lap driven",
+                self._sim_steps * SIM_DT,
+                100.0 * self._lap_progress,
+            )
+            return
+        self._lap_count += 1
+        self._lap_start_step = self._sim_steps
+        self._lap_progress = 0.0
+
     def _info(self, state: SimState) -> dict[str, Any]:
-        """Build the contract Section 4 info dict (raw SI values, not seen by the policy)."""
+        """Build the contract Section 4 info dict (raw SI values, not seen by the policy).
+
+        `state` must be the latest reading, the one info["progress"] was last measured at.
+        """
         return {
             "t": self._sim_steps * SIM_DT,
             "x": state.pose.x,
@@ -338,8 +412,8 @@ class LapZeroEnv(gym.Env[NDArray[np.float32], NDArray[np.float32]]):
             "v_long": state.v_long,
             "steer_rad": self._steer_rad,
             "v_target": self._v_target,
-            "lap_count": state.lap_count,
+            "lap_count": self._lap_count,
             "lap_time": (self._sim_steps - self._lap_start_step) * SIM_DT,
             "collision": state.collision,
-            "progress": self._progress(state.pose),
+            "progress": self._progress,
         }

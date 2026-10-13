@@ -47,7 +47,8 @@ class SimState:
         v_lat: Car-frame lateral speed, m/s.
         yaw_rate: Yaw rate, rad/s, CCW positive.
         collision: True if the car hit something on this step.
-        lap_count: Laps completed since reset.
+        lap_count: Start-line passes the simulator has counted since reset. LapZeroEnv decides
+            which of them are laps (contract Section 3).
     """
 
     scan: NDArray[np.float64]
@@ -75,6 +76,19 @@ class Simulator(Protocol):
 
     def step(self, steer_rad: float, v_target: float) -> SimState:
         """Advance one physics step with a steering angle (rad) and target velocity (m/s)."""
+        ...
+
+    @property
+    def friction(self) -> float:
+        """Tyre-road friction coefficient mu the car runs with (dimensionless)."""
+        ...
+
+    def set_friction(self, mu: float) -> None:
+        """Set the tyre-road friction coefficient mu (dimensionless) for the following steps.
+
+        Raises:
+            ValueError: If `mu` is not finite and > 0.
+        """
         ...
 
     def close(self) -> None:

@@ -284,14 +284,14 @@ def test_run_saves_loadable_weights_and_logs_the_required_params(
     tracker = FakeTracker()
     output = tmp_path / "models" / "bc_v1.pt"
     result = run_bc_training(laps_dir, output, BCConfig(epochs=2, **SMALL), tracker)
-    bc_tags = {"algorithm": "bc", "contract_version": "1.0.0"}
+    bc_tags = {"algorithm": "bc", "contract_version": "1.1.0"}
     assert tracker.registered == [(output, "lapzero-policy", bc_tags)]
     assert tracker.artifacts == []  # weights go to the model registry, not raw run artifacts
     obs = torch.rand(3, 113)
     with torch.no_grad():
         torch.testing.assert_close(load_policy(output)(obs), result.policy(obs))
     expected = {
-        "contract_version": "1.0.0",
+        "contract_version": "1.1.0",
         "contract.OBS_DIM": 113,
         "bc.epochs": 2,
         "seed": 0,

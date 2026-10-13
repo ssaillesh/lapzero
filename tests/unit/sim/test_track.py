@@ -1,5 +1,7 @@
-"""Unit tests for lapzero/sim/track.py: centreline validation, projection and CSV loading."""
+"""Unit tests for lapzero/sim/track.py: centreline validation, projection, cross-track offset, start
+pose and CSV loading."""
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +10,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from numpy.typing import NDArray
 
-from lapzero.sim.track import Centreline, load_centreline
+from lapzero.sim.track import Centreline, load_centreline, start_pose_from_centreline
 
 SQUARE = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])  # CCW, 40 m loop
 
@@ -72,6 +74,54 @@ def test_projection_is_the_arc_length_of_the_closest_centreline_point(
 def test_projection_always_lies_on_the_loop(x: float, y: float) -> None:
     centreline = Centreline(SQUARE)
     assert 0.0 <= centreline.project(x, y) < centreline.length
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "arc", "offset"),
+    [
+        (5.0, 0.0, 5.0, 0.0),  # on the centreline
+        (5.0, 1.0, 5.0, 1.0),  # inside the CCW loop: left of the driving direction
+        (5.0, -1.5, 5.0, -1.5),  # outside: right of the driving direction
+        (10.5, 5.0, 15.0, -0.5),
+        (2.0, 9.0, 28.0, 1.0),
+        (-3.0, -4.0, 0.0, -5.0),  # beyond a corner, closest to the first vertex
+    ],
+)
+def test_locate_gives_the_arc_and_the_signed_offset_positive_to_the_left(
+    x: float, y: float, arc: float, offset: float
+) -> None:
+    assert Centreline(SQUARE).locate(x, y) == pytest.approx((arc, offset))
+
+
+def test_the_offset_sign_follows_the_driving_direction() -> None:
+    clockwise = Centreline(SQUARE[::-1])
+    assert clockwise.locate(5.0, 1.0)[1] == pytest.approx(-1.0)  # inside a CW loop is the right
+
+
+@given(st.floats(-1e3, 1e3), st.floats(-1e3, 1e3))
+def test_locate_agrees_with_project_and_is_never_further_than_the_nearest_vertex(
+    x: float, y: float
+) -> None:
+    centreline = Centreline(SQUARE)
+    arc, offset = centreline.locate(x, y)
+    assert arc == centreline.project(x, y)
+    nearest_vertex = float(np.min(np.linalg.norm(SQUARE - [x, y], axis=1)))
+    assert abs(offset) <= nearest_vertex + 1e-9
+
+
+@pytest.mark.parametrize(
+    ("points", "x", "y", "theta"),
+    [
+        (SQUARE, 0.0, 0.0, 0.0),
+        ([[0.0, 0.0], [0.0, 10.0], [10.0, 10.0], [10.0, 0.0]], 0.0, 0.0, math.pi / 2),
+        ([[0.0, 10.0], [0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], 0.0, 10.0, -math.pi / 2),
+    ],
+)
+def test_start_pose_is_the_first_vertex_facing_the_second(
+    points: NDArray[np.float64], x: float, y: float, theta: float
+) -> None:
+    pose = start_pose_from_centreline(Centreline(np.asarray(points)))
+    assert (pose.x, pose.y, pose.theta) == pytest.approx((x, y, theta))
 
 
 def test_load_centreline_reads_the_f1tenth_racetracks_csv_format(tmp_path: Path) -> None:

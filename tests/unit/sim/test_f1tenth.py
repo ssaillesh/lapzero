@@ -13,7 +13,7 @@ import pytest
 
 import lapzero
 from lapzero.contract import RAW_BEAMS, ContractViolationError
-from lapzero.sim.f1tenth import load_track, state_from_f1tenth_obs, verify_baseline
+from lapzero.sim.f1tenth import f110_config, load_track, state_from_f1tenth_obs, verify_baseline
 from lapzero.sim.simulator import Pose
 
 
@@ -99,3 +99,22 @@ def test_load_track_reads_a_local_ros_map(tmp_path: Path) -> None:
 def test_load_track_raises_for_a_missing_map(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_track(tmp_path / "missing.yaml")
+
+
+def test_f110_config_runs_one_ego_car_on_the_track_with_the_seed() -> None:
+    track = object()
+    config = f110_config(track, seed=7, friction=None)
+    assert config["map"] is track
+    assert (config["num_agents"], config["seed"]) == (1, 7)
+    assert config["control_input"] == ["speed", "steering_angle"]
+    assert "params" not in config  # F1TENTH's default vehicle, friction included
+
+
+def test_f110_config_overrides_only_the_friction_coefficient() -> None:
+    assert f110_config(object(), seed=0, friction=0.7)["params"] == {"mu": 0.7}
+
+
+@pytest.mark.parametrize("friction", [0.0, -0.5, float("nan"), float("inf")])
+def test_f110_config_rejects_a_friction_that_is_not_finite_and_positive(friction: float) -> None:
+    with pytest.raises(ValueError, match="friction"):
+        f110_config(object(), seed=0, friction=friction)

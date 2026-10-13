@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
+
+from lapzero.sim.simulator import Pose
 
 
 @dataclass(frozen=True, slots=True, eq=False)  # eq on array fields would raise; compare by identity
@@ -56,13 +59,47 @@ class Centreline:
         Returns:
             Arc length from the first vertex in driving order, metres, in [0, length).
         """
+        return self.locate(x, y)[0]
+
+    def locate(self, x: float, y: float) -> tuple[float, float]:
+        """Return the arc length of the centreline point closest to (x, y) and the signed offset.
+
+        Args:
+            x: World-frame x, metres.
+            y: World-frame y, metres.
+
+        Returns:
+            (arc, offset): arc length from the first vertex in driving order, metres, in
+            [0, length); and the distance from that closest point, metres, positive to the left
+            of the driving direction and negative to the right (the cross-track error).
+        """
         offsets = np.array([x, y]) - self.points
         along = np.einsum("ij,ij->i", offsets, self._segments) / self._segment_lengths**2
         along = np.clip(along, 0.0, 1.0)
         gaps = offsets - along[:, None] * self._segments
-        nearest = int(np.argmin(np.einsum("ij,ij->i", gaps, gaps)))
+        distances_sq = np.einsum("ij,ij->i", gaps, gaps)
+        nearest = int(np.argmin(distances_sq))
         arc = self._starts[nearest] + along[nearest] * self._segment_lengths[nearest]
-        return float(arc) % self.length
+        (seg_x, seg_y), (gap_x, gap_y) = self._segments[nearest], gaps[nearest]
+        side = seg_x * gap_y - seg_y * gap_x  # z of segment x gap: positive when gap points left
+        offset = math.copysign(math.sqrt(distances_sq[nearest]), side)
+        return float(arc) % self.length, offset
+
+
+def start_pose_from_centreline(centreline: Centreline) -> Pose:
+    """Return the start pose at the centreline's first vertex, facing the second.
+
+    f1tenth_racetracks centrelines start on the start line in driving order, so this is each
+    track's fixed start pose (for Spielberg: x=0, y=0, theta=-2.879 rad).
+
+    Args:
+        centreline: Track centreline in driving order.
+
+    Returns:
+        Pose at the first vertex, x and y in metres, theta in rad towards the second vertex.
+    """
+    (x0, y0), (x1, y1) = centreline.points[:2]
+    return Pose(float(x0), float(y0), math.atan2(float(y1 - y0), float(x1 - x0)))
 
 
 def load_centreline(path: Path) -> Centreline:

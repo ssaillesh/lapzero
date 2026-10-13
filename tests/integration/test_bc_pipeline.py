@@ -55,14 +55,14 @@ def test_train_bc_script_saves_weights_and_records_a_finished_run(
     assert run.info.status == "FINISHED"
     assert run.info.run_name == "bc_v1"
     assert run.data.params["track_ids"] == "track_a,track_b"
-    assert run.data.params["contract_version"] == "1.0.0"
+    assert run.data.params["contract_version"] == "1.1.0"
     assert len(client.get_metric_history(run.info.run_id, "train_mse")) == 3
     artifacts = [artifact.path for artifact in client.list_artifacts(run.info.run_id)]
     assert artifacts == ["policy"]  # the registered MLflow Model, not a raw weights file
     registry = MlflowClient(tracking_uri=tracking_uri, registry_uri=tracking_uri)
     champion = registry.get_model_version_by_alias("lapzero-policy", ModelAlias.CHAMPION)
     assert champion.run_id == run.info.run_id
-    assert champion.tags == {"algorithm": "bc", "contract_version": "1.0.0"}
+    assert champion.tags == {"algorithm": "bc", "contract_version": "1.1.0"}
     registered = load_registered_policy(
         tracking_uri=tracking_uri, model_name="lapzero-policy", alias=ModelAlias.CHAMPION
     )

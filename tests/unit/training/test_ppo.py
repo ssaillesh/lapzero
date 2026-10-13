@@ -1,8 +1,8 @@
 """Unit tests for lapzero/training/ppo.py: config checks, BC warm start, critic warm-up, actor
-export and run logging.
+export, checkpoints and run logging, on one env or a two-track VecEnv.
 
 PPO trains on CPU with tiny networks, on a RacingReward-wrapped LapZeroEnv around the
-FakeSimulator; episodes are 5 control steps long and rollouts 16.
+FakeSimulator; episodes are 5 control steps long and rollouts 16 steps per env.
 """
 
 from pathlib import Path
@@ -13,6 +13,8 @@ import pytest
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 from lapzero.contract import OBS_HIGH, OBS_LOW
 from lapzero.sim.env import EnvConfig, LapZeroEnv
@@ -226,7 +228,7 @@ def test_run_ppo_training_saves_a_loadable_fine_tuned_actor_and_logs_the_run(
         output,
         TINY,
         tracker,
-        track_id="track_a",
+        track_ids=["track_a"],
         env_config=ENV_CONFIG,
         reward_config=RewardConfig(),
     )
@@ -235,11 +237,11 @@ def test_run_ppo_training_saves_a_loadable_fine_tuned_actor_and_logs_the_run(
     with torch.no_grad():
         torch.testing.assert_close(load_policy(output)(obs), actor(obs))
         assert not torch.equal(actor(obs), bc(obs)), "PPO updates should move the actor"
-    ppo_tags = {"algorithm": "ppo", "contract_version": "1.0.0", "reward_version": REWARD_VERSION}
+    ppo_tags = {"algorithm": "ppo", "contract_version": "1.1.0", "reward_version": REWARD_VERSION}
     assert tracker.registered == [(output, "lapzero-policy", ppo_tags)]
     assert tracker.artifacts == []  # weights go to the model registry, not raw run artifacts
     params = tracker.params
-    assert params["contract_version"] == "1.0.0"
+    assert params["contract_version"] == "1.1.0"
     assert params["contract.OBS_DIM"] == 113
     assert params["reward_version"] == REWARD_VERSION
     assert params["seed"] == 0
@@ -259,3 +261,119 @@ def test_run_ppo_training_saves_a_loadable_fine_tuned_actor_and_logs_the_run(
     # Timesteps keep counting from the warm-up into the PPO phase.
     assert tracker.steps("race/episode_length") == list(range(5, 46, 5))
     assert all(np.isfinite(value) for _, value, _ in tracker.metrics)
+
+
+def _two_track_vec_env() -> DummyVecEnv:
+    """Two monitored FakeSimulator envs in one process, shaped like make_track_vec_env's."""
+
+    def track_env() -> Monitor[np.ndarray, np.ndarray]:
+        sim_env = LapZeroEnv(FakeSimulator(), START_POSE, config=ENV_CONFIG, centreline=SQUARE)
+        return Monitor(RacingReward(sim_env))
+
+    return DummyVecEnv([track_env, track_env])
+
+
+def test_with_several_envs_the_critic_warmup_still_lasts_its_number_of_rollouts() -> None:
+    config = PPOConfig(
+        total_timesteps=96, n_steps=16, batch_size=8, n_epochs=2, critic_warmup_rollouts=2
+    )
+    model = build_ppo(_two_track_vec_env(), _bc(), config)  # rollouts of 2 envs x 16 steps
+    snapshots = RolloutSnapshots()
+    learn_with_critic_warmup(model, config, snapshots)
+    assert model.num_timesteps == 96
+    assert len(snapshots.actors) == 3
+    assert _equal(snapshots.actors[2], snapshots.actors[0]), "warm-up ended before 2 rollouts"
+    assert not _equal(snapshots.critics[2], snapshots.critics[0]), "warm-up left the critic"
+    state = model.policy.state_dict()
+    final_actor = {k: v for k, v in state.items() if k.startswith(ACTOR_PREFIXES)}
+    assert not _equal(final_actor, snapshots.actors[0]), "PPO never updated the actor"
+
+
+def test_a_critic_warmup_that_several_envs_stretch_over_all_timesteps_is_rejected() -> None:
+    config = PPOConfig(total_timesteps=48, n_steps=16, batch_size=8, critic_warmup_rollouts=2)
+    model = build_ppo(_two_track_vec_env(), _bc(), config)  # fine with one env: 32 < 48
+    with pytest.raises(ValueError, match="2 rollouts x 2 envs"):
+        learn_with_critic_warmup(model, config, RolloutSnapshots())
+
+
+def test_run_ppo_training_on_two_tracks_logs_every_race_metric_per_track(tmp_path: Path) -> None:
+    bc_path = tmp_path / "bc_v1.pt"
+    save_policy(_bc(), bc_path)
+    tracker = FakeTracker()
+
+    run_ppo_training(
+        _two_track_vec_env(),
+        bc_path,
+        tmp_path / "ppo.pt",
+        TINY,
+        tracker,
+        track_ids=["track_a", "track_b"],
+        env_config=ENV_CONFIG,
+        reward_config=RewardConfig(),
+    )
+
+    assert tracker.params["track_ids"] == "track_a,track_b"
+    assert tracker.params["n_envs"] == 2
+    assert "checkpoint_interval" not in tracker.params
+
+    def values(key: str) -> list[float]:
+        return [value for name, value, _ in tracker.metrics if name == key]
+
+    # 2 envs x 32 steps: each track drives six whole 5-step episodes.
+    assert values("race/track_a/episode_length") == [5.0] * 6
+    assert values("race/track_b/episode_length") == [5.0] * 6
+    for name in ("episode_length", "episode_reward", "episode_collision"):
+        per_track = values(f"race/track_a/{name}") + values(f"race/track_b/{name}")
+        assert sorted(values(f"race/{name}")) == sorted(per_track)
+
+
+def test_run_ppo_training_needs_one_track_id_per_env(env: RacingReward, tmp_path: Path) -> None:
+    bc_path = tmp_path / "bc_v1.pt"
+    save_policy(_bc(), bc_path)
+    tracker = FakeTracker()
+    with pytest.raises(ValueError, match="2 track_ids for 1 envs"):
+        run_ppo_training(
+            env,
+            bc_path,
+            tmp_path / "ppo.pt",
+            TINY,
+            tracker,
+            track_ids=["track_a", "track_b"],
+            env_config=ENV_CONFIG,
+            reward_config=RewardConfig(),
+        )
+    assert tracker.params == {}
+
+
+def test_run_ppo_training_saves_the_actor_at_every_checkpoint_interval(
+    env: RacingReward, tmp_path: Path
+) -> None:
+    bc = _bc()
+    bc_path, output = tmp_path / "bc_v1.pt", tmp_path / "models" / "ppo_v1.pt"
+    save_policy(bc, bc_path)
+    tracker = FakeTracker()
+
+    actor = run_ppo_training(
+        env,
+        bc_path,
+        output,
+        TINY,
+        tracker,
+        track_ids=["track_a"],
+        env_config=ENV_CONFIG,
+        reward_config=RewardConfig(),
+        checkpoint_interval=16,
+    )
+
+    assert tracker.params["checkpoint_interval"] == 16
+    directory = tmp_path / "models" / "checkpoints"
+    names = ["ppo_v1_step_16.pt", "ppo_v1_step_32.pt", "ppo_v1_step_48.pt"]
+    assert sorted(path.name for path in directory.iterdir()) == names
+    obs = torch.from_numpy(_observations())
+    with torch.no_grad():
+        # Step 16 ends the warm-up rollout, before any update: still the BC actor.
+        torch.testing.assert_close(load_policy(directory / names[0])(obs), bc(obs))
+        # Step 48 ends the last rollout: PPO has updated the actor once, the final update not yet.
+        last = load_policy(directory / names[2])(obs)
+        assert not torch.equal(last, bc(obs))
+        assert not torch.equal(last, actor(obs))

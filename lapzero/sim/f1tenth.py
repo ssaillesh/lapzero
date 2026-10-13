@@ -111,6 +111,43 @@ def verify_baseline(sim_env: Any) -> None:
             raise ContractViolationError(f"simulator {name} is {actual}, contract says {expected}")
 
 
+def f110_config(track: Any, *, seed: int, friction: float | None) -> dict[str, Any]:
+    """Build the F110Env config for one ego car on `track`.
+
+    F110Env deep-merges "params" into its default vehicle, so only the friction is overridden.
+    Friction is not a contract value; varying it is a robustness diagnostic.
+
+    Args:
+        track: f1tenth_gym Track from load_track (untyped third-party object).
+        seed: Seed for the simulator's LiDAR noise.
+        friction: Tyre-road friction coefficient mu (dimensionless), or None for F1TENTH's
+            default vehicle.
+
+    Returns:
+        The config dict for F110Env.
+
+    Raises:
+        ValueError: If `friction` is not finite and > 0.
+    """
+    config: dict[str, Any] = {
+        "map": track,
+        "num_agents": 1,
+        "seed": seed,
+        "control_input": ["speed", "steering_angle"],
+        "observation_config": {"type": "features", "features": _F1TENTH_FEATURES},
+    }
+    if friction is not None:
+        _check_friction(friction)
+        config["params"] = {"mu": friction}
+    return config
+
+
+def _check_friction(mu: float) -> None:
+    """Raise ValueError unless the friction coefficient `mu` is finite and > 0."""
+    if not (math.isfinite(mu) and mu > 0.0):
+        raise ValueError(f"friction must be finite and > 0, got {mu}")
+
+
 def state_from_f1tenth_obs(obs: Mapping[str, Any]) -> SimState:
     """Convert an F1TENTH Gym v1 "features" observation of the ego car into a SimState.
 
@@ -141,32 +178,51 @@ class F1TenthSimulator:
     process. Do not run envs on different maps in the same process.
     """
 
-    def __init__(self, map_yaml: Path, *, seed: int, render: bool = False) -> None:
+    def __init__(
+        self, map_yaml: Path, *, seed: int, render: bool = False, friction: float | None = None
+    ) -> None:
         """Load the map and start the simulator.
 
         Args:
             map_yaml: ROS map yaml; see load_track.
             seed: Seed for the simulator's LiDAR noise.
             render: Open F1TENTH's pygame window, drawn by render().
+            friction: Tyre-road friction coefficient mu (dimensionless); None keeps F1TENTH's
+                default. A robustness diagnostic, not a contract value.
 
         Raises:
             FileNotFoundError: If the map files are missing.
+            ValueError: If `friction` is not finite and > 0.
             ContractViolationError: If the simulator baseline differs from the contract.
         """
         from f1tenth_gym.envs import F110Env  # heavy (numba, pygame): import only when used
 
-        logger.info("starting F1TENTH Gym on %s with seed=%d", map_yaml, seed)
-        self._env: Any = F110Env(
-            config={
-                "map": load_track(map_yaml),
-                "num_agents": 1,
-                "seed": seed,
-                "control_input": ["speed", "steering_angle"],
-                "observation_config": {"type": "features", "features": _F1TENTH_FEATURES},
-            },
-            render_mode="human" if render else None,
-        )
+        config = f110_config(load_track(map_yaml), seed=seed, friction=friction)
+        self._env: Any = F110Env(config=config, render_mode="human" if render else None)
         verify_baseline(self._env)
+        logger.info(
+            "started F1TENTH Gym on %s with seed=%d, friction mu=%s", map_yaml, seed, self.friction
+        )
+
+    @property
+    def friction(self) -> float:
+        """Tyre-road friction coefficient mu the simulated car runs with (dimensionless)."""
+        return float(self._env.params["mu"])
+
+    def set_friction(self, mu: float) -> None:
+        """Set the tyre-road friction coefficient mu for the following physics steps.
+
+        F110Env.configure deep-merges the value into the vehicle params and hands them to the
+        car, which reads them on every step, so the change needs no restart.
+
+        Args:
+            mu: Friction coefficient (dimensionless).
+
+        Raises:
+            ValueError: If `mu` is not finite and > 0.
+        """
+        _check_friction(mu)
+        self._env.configure({"params": {"mu": mu}})
 
     def reset(self, pose: Pose) -> SimState:
         """Place the car at rest at `pose` and return the first reading.

@@ -36,7 +36,7 @@ MODEL = "lapzero-policy"
 def test_contract_params_hold_every_scalar_contract_constant() -> None:
     params = contract_params()
     assert params["contract.OBS_DIM"] == 113
-    assert params["contract.CONTRACT_VERSION"] == "1.0.0"
+    assert params["contract.CONTRACT_VERSION"] == "1.1.0"
     assert params["contract.REVERSE_ENABLED"] is False
     assert "contract.OBS_LOW" not in params
     assert "contract.LIDAR_SLICE" not in params
@@ -193,7 +193,7 @@ def test_a_registered_version_is_a_tagged_mlflow_model_of_its_run(
     assert files == ["policy/MLmodel", "policy/policy.pt"]
     mlmodel = Path(client.download_artifacts(run_id, "policy/MLmodel", str(tmp_path)))
     flavor = read_policy_flavor(mlmodel.parent)
-    assert flavor == {"checkpoint": "policy.pt", "contract_version": "1.0.0"}
+    assert flavor == {"checkpoint": "policy.pt", "contract_version": "1.1.0"}
 
 
 def test_loading_an_alias_that_was_never_set_raises(tracking_uri: str, tmp_path: Path) -> None:

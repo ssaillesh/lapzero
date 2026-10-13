@@ -158,7 +158,7 @@ def test_exported_json_validates_and_carries_the_contract_header(
     assert set(raw) == CONTRACT_KEYS
     assert set(raw["frames"]) == FRAME_KEYS
     assert raw["schema"] == "lapzero.lap_telemetry"
-    assert (raw["schema_version"], raw["contract_version"]) == ("1.0.0", "1.0.0")
+    assert (raw["schema_version"], raw["contract_version"]) == ("1.0.0", "1.1.0")
     assert raw["created_at"] == "2026-10-20T14:32:05Z"
     assert re.fullmatch(ULID_PATTERN, raw["lap_id"])
     assert re.fullmatch(ULID_PATTERN, raw["episode_id"])
@@ -212,7 +212,7 @@ def test_npz_holds_the_observation_seen_before_each_recorded_action(
         assert arrays["rewards"].shape == (4,)
         assert arrays["dones"].dtype == np.bool_
         assert not arrays["dones"].any()
-        assert str(arrays["contract_version"]) == "1.0.0"
+        assert str(arrays["contract_version"]) == "1.1.0"
 
 
 def test_each_frame_pairs_the_state_before_a_step_with_its_action_and_command(

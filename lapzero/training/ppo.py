@@ -12,25 +12,28 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-import gymnasium as gym
-import numpy as np
 import torch
-from numpy.typing import NDArray
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.policies import ActorCriticPolicy
-from stable_baselines3.common.type_aliases import Schedule
+from stable_baselines3.common.type_aliases import GymEnv, Schedule
+from stable_baselines3.common.vec_env import VecEnv
 from torch import nn
 
 from lapzero.contract import CONTRACT_VERSION
 from lapzero.sim.env import EnvConfig
 from lapzero.sim.reward import REWARD_VERSION, RewardConfig
-from lapzero.training.callbacks import RaceMetricsCallback, TrackerOutputFormat
+from lapzero.training.callbacks import (
+    PolicyCheckpointCallback,
+    RaceMetricsCallback,
+    TrackerOutputFormat,
+)
 from lapzero.training.policy import BCPolicy, load_policy, save_policy
 from lapzero.training.tracking import (
     REGISTERED_MODEL,
@@ -59,9 +62,10 @@ class PPOConfig:
     the BC policy while both improve.
 
     Attributes:
-        total_timesteps: Control steps of experience to collect.
+        total_timesteps: Control steps of experience to collect, summed over all envs.
         learning_rate: Adam learning rate; a tenth of SB3's 3e-4 default.
-        n_steps: Control steps per rollout before each update.
+        n_steps: Control steps per env per rollout before each update; a rollout holds
+            n_steps x number of envs steps.
         batch_size: Minibatch size, at least 2.
         n_epochs: Passes over each rollout; half SB3's default to limit drift per update.
         gamma: Discount per control step; 0.99 at 25 Hz looks about 4 s ahead.
@@ -128,7 +132,8 @@ class PPOConfig:
 
     @property
     def critic_warmup_timesteps(self) -> int:
-        """Timesteps collected during the critic warm-up."""
+        """Timesteps collected during the critic warm-up with one env; n envs collect n times as
+        many."""
         return self.critic_warmup_rollouts * self.n_steps
 
 
@@ -198,13 +203,12 @@ def export_actor(policy: ActorCriticPolicy) -> BCPolicy:
     return actor
 
 
-def build_ppo(
-    env: gym.Env[NDArray[np.float32], NDArray[np.float32]], bc: BCPolicy, config: PPOConfig
-) -> PPO:
+def build_ppo(env: GymEnv, bc: BCPolicy, config: PPOConfig) -> PPO:
     """Create a seeded CPU PPO model on `env` whose actor starts as `bc`.
 
     Args:
-        env: Training env with the contract observation and action spaces.
+        env: Training env with the contract observation and action spaces, or a VecEnv of such
+            envs (each wrapped in a Monitor). PPO seeds env i's resets with config.seed + i.
         bc: Policy whose weights initialise the actor; its hidden size sets both networks'.
         config: PPO hyperparameters and seed.
 
@@ -264,14 +268,24 @@ def learn_with_critic_warmup(model: PPO, config: PPOConfig, callback: BaseCallba
 
     During the warm-up the BC policy (with its action noise) collects rollouts and PPO's value
     loss fits the critic to their returns while the actor stays frozen. Training then continues
-    from the same env state and timestep count with actor and critic both updating.
+    from the same env state and timestep count with actor and critic both updating. A rollout
+    holds n_steps from every env, so the warm-up lasts critic_warmup_rollouts rollouts whatever
+    the number of envs.
 
     Args:
         model: PPO model built by build_ppo.
         config: Total and warm-up timesteps.
         callback: Receives every step of both phases.
+
+    Raises:
+        ValueError: If the warm-up, scaled by the number of envs, uses all total_timesteps.
     """
-    warmup = config.critic_warmup_timesteps
+    warmup = config.critic_warmup_timesteps * model.n_envs
+    if warmup >= config.total_timesteps:
+        raise ValueError(
+            f"critic warm-up of {config.critic_warmup_rollouts} rollouts x {model.n_envs} envs x "
+            f"n_steps {config.n_steps} uses all {config.total_timesteps} total_timesteps"
+        )
     if warmup:
         logger.info("critic warm-up: %d timesteps with the actor frozen", warmup)
         set_actor_trainable(model.policy, False)
@@ -288,40 +302,52 @@ def _prefixed(prefix: str, config: PPOConfig | EnvConfig | RewardConfig) -> dict
 
 
 def run_ppo_training(
-    env: gym.Env[NDArray[np.float32], NDArray[np.float32]],
+    env: GymEnv,
     bc_path: Path,
     output_path: Path,
     config: PPOConfig,
     tracker: RunTracker,
     *,
-    track_id: str,
+    track_ids: Sequence[str],
     env_config: EnvConfig,
     reward_config: RewardConfig,
     registered_model: str = REGISTERED_MODEL,
+    checkpoint_interval: int | None = None,
 ) -> BCPolicy:
     """Fine-tune a BC policy with PPO, save the actor and record the run (CLAUDE.md section 9).
 
     The actor is registered as a new version of `registered_model`, tagged algorithm=ppo; it
-    becomes the challenger, or the champion if the model has none yet.
+    becomes the challenger, or the champion if the model has none yet. Race metrics are logged
+    pooled over all envs and per track (RaceMetricsCallback).
 
     Args:
-        env: Training env, normally a RacingReward around a LapZeroEnv.
+        env: Training env, normally a RacingReward around a LapZeroEnv, or a VecEnv with one
+            monitored env per track (lapzero.training.vec_env.make_track_vec_env).
         bc_path: BC checkpoint written by save_policy, e.g. models/bc_v1.pt.
         output_path: Where to write the fine-tuned actor, e.g. models/ppo_v1.pt.
         config: PPO hyperparameters and seed.
         tracker: Run tracker (an MLflow run in production).
-        track_id: Track the env drives, logged as track_ids.
-        env_config: The env's settings, logged as env.* params.
-        reward_config: The env's reward weights, logged as reward.* params.
+        track_ids: Track each env drives, in env order; logged comma-separated as track_ids.
+        env_config: The envs' settings, logged as env.* params.
+        reward_config: The envs' reward weights, logged as reward.* params.
         registered_model: Model registry name to add the version to.
+        checkpoint_interval: Save the actor every this many timesteps to
+            <output dir>/checkpoints/<output stem>_step_<N>.pt; None saves only the final actor.
 
     Returns:
         The fine-tuned deterministic actor, as saved to output_path.
 
     Raises:
+        ValueError: If track_ids does not hold one id per env, or checkpoint_interval < 1.
         ContractViolationError: If the BC checkpoint was saved under another contract.
     """
+    n_envs = env.num_envs if isinstance(env, VecEnv) else 1
+    if len(track_ids) != n_envs:
+        raise ValueError(f"got {len(track_ids)} track_ids for {n_envs} envs: {list(track_ids)}")
     bc = load_policy(bc_path)
+    checkpoint_params: dict[str, ParamValue] = (
+        {} if checkpoint_interval is None else {"checkpoint_interval": checkpoint_interval}
+    )
     tracker.log_params(
         {
             **contract_params(),
@@ -331,15 +357,27 @@ def run_ppo_training(
             "contract_version": CONTRACT_VERSION,
             "reward_version": REWARD_VERSION,
             "seed": config.seed,
-            "track_ids": track_id,
+            "track_ids": ",".join(track_ids),
+            "n_envs": n_envs,
             "warm_start": bc_path.name,
             "hidden_size": bc.hidden_size,
             "git_commit": git_commit(),
+            **checkpoint_params,
         }
     )
     model = build_ppo(env, bc, config)
     model.set_logger(Logger(folder=None, output_formats=[TrackerOutputFormat(tracker)]))
-    learn_with_critic_warmup(model, config, RaceMetricsCallback(tracker))
+    callbacks: list[BaseCallback] = [RaceMetricsCallback(tracker, track_ids)]
+    if checkpoint_interval is not None:
+        callbacks.append(
+            PolicyCheckpointCallback(
+                checkpoint_interval,
+                output_path.parent / "checkpoints",
+                output_path.stem,
+                actor=lambda: export_actor(model.policy),
+            )
+        )
+    learn_with_critic_warmup(model, config, CallbackList(callbacks))
     actor = export_actor(model.policy)
     save_policy(actor, output_path)
     logger.info("saved PPO policy to %s", output_path)

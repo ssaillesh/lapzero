@@ -1,4 +1,4 @@
-"""State space contract constants, version 1.0.0 (docs/contracts/state_space.md).
+"""State space contract constants, version 1.1.0 (docs/contracts/state_space.md).
 
 Every contract value lives here and nowhere else; all other modules import from this file.
 Changing any value is a contract change: follow Section 7 of the contract before editing.
@@ -9,7 +9,7 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
-CONTRACT_VERSION: Final = "1.0.0"
+CONTRACT_VERSION: Final = "1.1.0"
 
 
 class ContractViolationError(ValueError):
@@ -73,6 +73,7 @@ LAPS_PER_EPISODE_TRAIN: Final = 3
 MAX_EPISODE_S: Final = 120.0  # s
 STUCK_SPEED: Final = 0.2  # m/s, below this the car counts as stuck
 STUCK_S: Final = 3.0  # s stuck before the episode is truncated
+LAP_MIN_PROGRESS: Final = 0.9  # net lap fraction driven forward before a start-line pass counts
 
 # Lap telemetry JSON + .npz (Section 5).
 TELEMETRY_SCHEMA: Final = "lapzero.lap_telemetry"
