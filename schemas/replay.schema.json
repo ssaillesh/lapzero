@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lapzero:schema:replay:1.0.0",
+  "title": "LapZero replay trajectory",
+  "description": "One lap downsampled to 10 Hz for the browser ghost-lap replay, served by GET /api/replays/{lap_id} (docs/contracts/state_space.md Section 6, contract 1.1.0). Mirrors lapzero.io.replay.Replay. Every points array has the same length; JSON Schema cannot express that, so the model and tests/contracts/test_replay_schema.py enforce it. Track geometry is not embedded. NaN and Infinity are not valid JSON and must never appear.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "lap_id",
+    "track_id",
+    "driver_label",
+    "lap_time_s",
+    "hz",
+    "points"
+  ],
+  "properties": {
+    "schema": { "const": "lapzero.replay" },
+    "schema_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "lap_id": {
+      "description": "ULID of the lap telemetry the replay was built from.",
+      "type": "string",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+    },
+    "track_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+    "driver_label": {
+      "description": "Dashboard label, e.g. \"AI v7\" for a model or the driver's name for a human.",
+      "type": "string",
+      "minLength": 1
+    },
+    "lap_time_s": {
+      "description": "Lap time, s; null for a lap that did not complete.",
+      "anyOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }]
+    },
+    "hz": { "description": "Replay sample rate, Hz.", "const": 10 },
+    "points": {
+      "description": "Columnar 10 Hz samples; every array has the same length.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "x", "y", "theta", "v", "steer"],
+      "properties": {
+        "t": {
+          "description": "Seconds since the lap's first frame.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": 0 }
+        },
+        "x": {
+          "description": "World frame, metres.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "y": {
+          "description": "World frame, metres.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "theta": {
+          "description": "World frame heading, rad.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "v": {
+          "description": "Longitudinal speed, m/s.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "steer": {
+          "description": "Normalized policy steering action.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": -1, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

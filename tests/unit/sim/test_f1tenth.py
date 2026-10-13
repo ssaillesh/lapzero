@@ -13,7 +13,14 @@ import pytest
 
 import lapzero
 from lapzero.contract import RAW_BEAMS, ContractViolationError
-from lapzero.sim.f1tenth import f110_config, load_track, state_from_f1tenth_obs, verify_baseline
+from lapzero.sim.f1tenth import (
+    BaselineValue,
+    baseline_values,
+    f110_config,
+    load_track,
+    state_from_f1tenth_obs,
+    verify_baseline,
+)
 from lapzero.sim.simulator import Pose
 
 
@@ -79,6 +86,40 @@ def test_verify_baseline_accepts_contract_values() -> None:
 def test_verify_baseline_names_the_value_that_differs(params: dict[str, float], name: str) -> None:
     with pytest.raises(ContractViolationError, match=name):
         verify_baseline(_fake_f110_env(**params))
+
+
+def test_baseline_values_reports_every_baseline_row_and_n_beams_matching() -> None:
+    values = baseline_values(_fake_f110_env())
+    assert [value.name for value in values] == [
+        "SIM_DT",
+        "RAW_BEAMS",
+        "LIDAR_FOV",
+        "LIDAR_MAX",
+        "STEER_MAX (s_max)",
+        "STEER_MAX (s_min)",
+        "SIM_V_MIN",
+        "SIM_V_MAX",
+        "N_BEAMS (RAW_BEAMS / BEAM_BIN)",
+    ]
+    assert all(value.matches for value in values)
+    assert values[-1] == BaselineValue("N_BEAMS (RAW_BEAMS / BEAM_BIN)", 108.0, 108.0)
+
+
+def test_baseline_values_flags_every_differing_row_not_only_the_first() -> None:
+    sim_env = _fake_f110_env(s_min=-0.3, v_max=25.0)
+    sim_env.sim.agents[0].scan_simulator.num_beams = 1000
+    mismatches = {value.name for value in baseline_values(sim_env) if not value.matches}
+    assert mismatches == {
+        "RAW_BEAMS",
+        "STEER_MAX (s_min)",
+        "SIM_V_MAX",
+        "N_BEAMS (RAW_BEAMS / BEAM_BIN)",
+    }
+
+
+def test_baseline_value_matches_within_float_rounding_only() -> None:
+    assert BaselineValue("SIM_DT", 0.1 + 0.2, 0.3).matches
+    assert not BaselineValue("STEER_MAX", 0.4188, 0.4189).matches
 
 
 def test_load_track_reads_a_local_ros_map(tmp_path: Path) -> None:

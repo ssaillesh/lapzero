@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
@@ -18,8 +19,10 @@ import numpy as np
 from PIL import Image
 
 from lapzero.contract import (
+    BEAM_BIN,
     LIDAR_FOV,
     LIDAR_MAX,
+    N_BEAMS,
     RAW_BEAMS,
     SIM_DT,
     SIM_V_MAX,
@@ -86,14 +89,32 @@ def load_track(map_yaml: Path) -> Any:
     )
 
 
-def verify_baseline(sim_env: Any) -> None:
-    """Check an F110Env's built-in values against the contract's simulator baseline table.
+@dataclasses.dataclass(frozen=True, slots=True)
+class BaselineValue:
+    """One simulator value the contract fixes: what the simulator reports and what the contract
+    says, in the contract's units (s, rad, m, m/s, or a beam count)."""
+
+    name: str
+    installed: float
+    contract: float
+
+    @property
+    def matches(self) -> bool:
+        """Whether the simulator value equals the contract value (relative tolerance 1e-9)."""
+        return math.isclose(self.installed, self.contract, rel_tol=1e-9)
+
+
+def baseline_values(sim_env: Any) -> list[BaselineValue]:
+    """Read every row of the contract's simulator baseline table from an F110Env.
+
+    Also reads the simulator's beams per downsampled beam, which must equal N_BEAMS for the
+    LiDAR downsampling rule (contract Section 1.3) to apply.
 
     Args:
         sim_env: An f1tenth_gym F110Env (untyped third-party object).
 
-    Raises:
-        ContractViolationError: Naming the first value that differs from the contract.
+    Returns:
+        The simulator and contract value of each row, in baseline table order.
     """
     scanner = sim_env.sim.agents[0].scan_simulator
     pairs = {
@@ -105,10 +126,64 @@ def verify_baseline(sim_env: Any) -> None:
         "STEER_MAX (s_min)": (-sim_env.params["s_min"], STEER_MAX),
         "SIM_V_MIN": (sim_env.params["v_min"], SIM_V_MIN),
         "SIM_V_MAX": (sim_env.params["v_max"], SIM_V_MAX),
+        "N_BEAMS (RAW_BEAMS / BEAM_BIN)": (scanner.num_beams / BEAM_BIN, N_BEAMS),
     }
-    for name, (actual, expected) in pairs.items():
-        if not math.isclose(float(actual), expected, rel_tol=1e-9):
-            raise ContractViolationError(f"simulator {name} is {actual}, contract says {expected}")
+    return [
+        BaselineValue(name, float(installed), float(contract))
+        for name, (installed, contract) in pairs.items()
+    ]
+
+
+def verify_baseline(sim_env: Any) -> None:
+    """Check an F110Env's built-in values against the contract's simulator baseline table.
+
+    Args:
+        sim_env: An f1tenth_gym F110Env (untyped third-party object).
+
+    Raises:
+        ContractViolationError: Naming the first value that differs from the contract.
+    """
+    for value in baseline_values(sim_env):
+        if not value.matches:
+            raise ContractViolationError(
+                f"simulator {value.name} is {value.installed}, contract says {value.contract}"
+            )
+
+
+def installed_baseline() -> list[BaselineValue]:
+    """Start the installed F1TENTH Gym on a blank map and read its simulator baseline values.
+
+    Tracks are not in git, so the simulator runs on an empty walled room written to a temporary
+    directory. Nothing is checked here; compare with BaselineValue.matches.
+
+    Returns:
+        The simulator and contract value of each baseline row (see baseline_values).
+    """
+    from f1tenth_gym.envs import F110Env  # heavy (numba, pygame): import only when used
+
+    with tempfile.TemporaryDirectory() as directory:
+        config = f110_config(load_track(_write_empty_room(Path(directory))), seed=0, friction=None)
+        sim_env = F110Env(config=config)
+        try:
+            return baseline_values(sim_env)
+        finally:
+            sim_env.close()
+
+
+def _write_empty_room(directory: Path) -> Path:
+    """Write a ROS map of an empty 5 m x 5 m room with walls in `directory`; return its yaml."""
+    size_px, wall_px = 100, 4  # 0.05 m per pixel
+    pixels = np.full((size_px, size_px), 255, dtype=np.uint8)
+    pixels[:wall_px, :] = pixels[-wall_px:, :] = 0
+    pixels[:, :wall_px] = pixels[:, -wall_px:] = 0
+    (directory / "room.pgm").write_bytes(
+        f"P5\n{size_px} {size_px}\n255\n".encode() + pixels.tobytes()
+    )
+    (directory / "room.yaml").write_text(
+        "image: room.pgm\nresolution: 0.05\norigin: [-2.5, -2.5, 0.0]\n"
+        "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+    )
+    return directory / "room.yaml"
 
 
 def f110_config(track: Any, *, seed: int, friction: float | None) -> dict[str, Any]:

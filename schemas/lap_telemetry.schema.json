@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:lapzero:schema:lap_telemetry:1.0.0",
+  "title": "LapZero lap telemetry",
+  "description": "One recorded lap at the 25 Hz control rate (docs/contracts/state_space.md Section 5, contract 1.1.0). Mirrors lapzero.io.telemetry.LapTelemetry. Two rules JSON Schema cannot express are enforced by that model and by tests/contracts/test_telemetry_schema.py: every frames array has the same length, and that length equals result.sample_count. NaN and Infinity are not valid JSON and must never appear.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "contract_version",
+    "lap_id",
+    "episode_id",
+    "lap_index",
+    "created_at",
+    "track",
+    "driver",
+    "sim",
+    "result",
+    "frames"
+  ],
+  "properties": {
+    "schema": { "const": "lapzero.lap_telemetry" },
+    "schema_version": { "$ref": "#/$defs/semver" },
+    "contract_version": { "$ref": "#/$defs/semver" },
+    "lap_id": { "$ref": "#/$defs/ulid" },
+    "episode_id": { "$ref": "#/$defs/ulid" },
+    "lap_index": {
+      "description": "1 for the first lap of an episode.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "description": "ISO 8601 UTC with Z.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "track": { "$ref": "#/$defs/track" },
+    "driver": { "$ref": "#/$defs/driver" },
+    "sim": { "$ref": "#/$defs/sim" },
+    "result": { "$ref": "#/$defs/result" },
+    "frames": { "$ref": "#/$defs/frames" }
+  },
+  "$defs": {
+    "semver": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "ulid": {
+      "description": "26 Crockford base32 characters (128 bits), sortable by time.",
+      "type": "string",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+    },
+    "track_id": {
+      "description": "Also used as a directory name, so no path separators.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["track_id", "direction", "length_m"],
+      "properties": {
+        "track_id": { "$ref": "#/$defs/track_id" },
+        "direction": { "enum": ["cw", "ccw"] },
+        "length_m": {
+          "description": "Centreline length, metres.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "driver": {
+      "description": "Model fields are set only for models, the input device only for humans.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name", "model_version", "mlflow_run_id", "human_input_device"],
+      "properties": {
+        "type": { "enum": ["human", "model"] },
+        "name": { "type": "string", "minLength": 1 },
+        "model_version": { "type": ["string", "null"] },
+        "mlflow_run_id": { "type": ["string", "null"] },
+        "human_input_device": { "enum": ["keyboard", "gamepad", null] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "human" } } },
+          "then": {
+            "properties": {
+              "model_version": { "type": "null" },
+              "mlflow_run_id": { "type": "null" },
+              "human_input_device": { "enum": ["keyboard", "gamepad"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "model" } } },
+          "then": {
+            "properties": {
+              "model_version": { "type": "string" },
+              "mlflow_run_id": { "type": "string" },
+              "human_input_device": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "sim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "simulator",
+        "sim_version",
+        "sim_dt",
+        "action_repeat",
+        "ctrl_hz",
+        "v_max_train",
+        "seed"
+      ],
+      "properties": {
+        "simulator": { "type": "string", "minLength": 1 },
+        "sim_version": { "type": "string", "minLength": 1 },
+        "sim_dt": { "description": "Physics timestep, s.", "type": "number", "exclusiveMinimum": 0 },
+        "action_repeat": { "type": "integer", "minimum": 1 },
+        "ctrl_hz": { "type": "integer", "minimum": 1 },
+        "v_max_train": {
+          "description": "Target velocity cap, m/s; never above SIM_V_MAX.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20.0
+        },
+        "seed": { "type": "integer" }
+      }
+    },
+    "result": {
+      "description": "lap_time_s is set only for completed laps.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "lap_time_s",
+        "collision",
+        "off_track_events",
+        "max_speed_mps",
+        "mean_speed_mps",
+        "sample_count"
+      ],
+      "properties": {
+        "status": { "enum": ["completed", "crashed", "timeout", "stuck"] },
+        "lap_time_s": {
+          "description": "Lap time, s.",
+          "anyOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }]
+        },
+        "collision": { "type": "boolean" },
+        "off_track_events": { "type": "integer", "minimum": 0 },
+        "max_speed_mps": { "description": "m/s.", "type": "number" },
+        "mean_speed_mps": { "description": "m/s.", "type": "number" },
+        "sample_count": {
+          "description": "Length of every frames array.",
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": { "properties": { "lap_time_s": { "type": "number" } } },
+      "else": { "properties": { "lap_time_s": { "type": "null" } } }
+    },
+    "frames": {
+      "description": "Columnar per-control-step samples; every array has result.sample_count items.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "t",
+        "x",
+        "y",
+        "theta",
+        "v_long",
+        "steer",
+        "throttle",
+        "steer_rad",
+        "v_target",
+        "progress"
+      ],
+      "properties": {
+        "t": {
+          "description": "Seconds since reset.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": 0 }
+        },
+        "x": {
+          "description": "World frame, metres.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "y": {
+          "description": "World frame, metres.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "theta": {
+          "description": "World frame heading, rad.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "v_long": {
+          "description": "Longitudinal speed, m/s.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number" }
+        },
+        "steer": {
+          "description": "Normalized policy steering action.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/normalized" }
+        },
+        "throttle": {
+          "description": "Normalized policy throttle action.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/normalized" }
+        },
+        "steer_rad": {
+          "description": "Applied steering command, rad, within +-STEER_MAX.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": -0.4189, "maximum": 0.4189 }
+        },
+        "v_target": {
+          "description": "Applied target velocity command, m/s, within [SIM_V_MIN, SIM_V_MAX].",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": -5.0, "maximum": 20.0 }
+        },
+        "progress": {
+          "description": "Fraction of the centreline, 0..1.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "normalized": { "type": "number", "minimum": -1, "maximum": 1 }
+  }
+}
