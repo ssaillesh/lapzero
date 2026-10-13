@@ -86,3 +86,8 @@ DECIMALS_ANGLE: Final = 4  # theta, steer_rad
 DECIMALS_SPEED: Final = 3  # v_long, v_target, speed summaries
 DECIMALS_ACTION: Final = 3  # steer, throttle
 DECIMALS_PROGRESS: Final = 4  # not listed in Section 5.2; matches the Section 5.1 example
+
+# Replay trajectory JSON (Section 6).
+REPLAY_SCHEMA: Final = "lapzero.replay"
+REPLAY_SCHEMA_VERSION: Final = "1.0.0"
+REPLAY_HZ: Final = 10  # replay sample rate, Hz

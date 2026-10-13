@@ -4,15 +4,21 @@ version = "0.1.0"
 description = "AI race driver trained in the F1TENTH Gym simulator, with a CI release gate."
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.20.0",
     "f1tenth-gym",
+    "fastapi>=0.143.0",
     "gymnasium>=0.29.1",
     "mlflow-skinny>=3.17.0",
     "numpy>=2.4.6",
     "pillow>=12.3.0",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2",
+    "pydantic-settings>=2.15.0",
     "pygame>=2.5.2,<3",
+    "sqlalchemy>=2.1.4",
     "stable-baselines3>=2.9.0",
     "torch>=2.14.1",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
@@ -26,6 +32,7 @@ module-root = ""
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "hypothesis>=6.169.0",
     "mypy>=2.4.0",
     "pytest>=9.1.1",

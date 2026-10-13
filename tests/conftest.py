@@ -15,7 +15,7 @@ import pytest
 from hypothesis import settings
 from numpy.typing import NDArray
 
-from lapzero.contract import RAW_BEAMS
+from lapzero.contract import CONTRACT_VERSION, CTRL_DT, RAW_BEAMS
 from lapzero.eval.sweep import SWEEP_FILE, LevelReport, SweepReport, SweepRun, friction_grid
 from lapzero.io.telemetry import (
     DriverInfo,
@@ -221,6 +221,93 @@ def record_lap(
         written += recorder.record_step(action, obs, reward, terminated, truncated, info)
     (files,) = written
     return files
+
+
+def fixed_ulid(n: int) -> str:
+    """A constant, valid ULID numbered `n` (0 to 99), for deterministic lap IDs."""
+    return f"01J9ZK8V3Q7M2T6C1R4X5N8B{n:02d}"
+
+
+def model_driver_json(version: str = "7", name: str = "lapzero-ppo") -> dict[str, Any]:
+    """The telemetry driver block of a registered model version."""
+    return {
+        "type": "model",
+        "name": name,
+        "model_version": version,
+        "mlflow_run_id": "3f2a9c1d8e7b4a6f9c0d1e2f3a4b5c6d",
+        "human_input_device": None,
+    }
+
+
+def human_driver_json(name: str = "sam") -> dict[str, Any]:
+    """The telemetry driver block of a human on a keyboard."""
+    return {
+        "type": "human",
+        "name": name,
+        "model_version": None,
+        "mlflow_run_id": None,
+        "human_input_device": "keyboard",
+    }
+
+
+def lap_telemetry_document(
+    lap_id: str = "01J9ZK8V3Q7M2T6C1R4X5N8B0A",
+    *,
+    track_id: str = "track_02",
+    driver: dict[str, Any] | None = None,
+    lap_time_s: float | None = 35.97,
+    created_at: str = "2026-10-20T14:32:05Z",
+    contract_version: str = CONTRACT_VERSION,
+    frames: int = 26,
+) -> dict[str, Any]:
+    """A valid contract Section 5 lap telemetry JSON document, as a lap upload body.
+
+    The car drives along x at 2 m/s for `frames` 25 Hz samples. lap_time_s None makes the lap
+    a crash; driver defaults to model version 7.
+    """
+    t = [round(i * CTRL_DT, 2) for i in range(frames)]
+    zeros = [0.0] * frames
+    return {
+        "schema": "lapzero.lap_telemetry",
+        "schema_version": "1.0.0",
+        "contract_version": contract_version,
+        "lap_id": lap_id,
+        "episode_id": "01J9ZK8T9E0Y3H2P6W1D7F4G5S",
+        "lap_index": 1,
+        "created_at": created_at,
+        "track": {"track_id": track_id, "direction": "ccw", "length_m": 82.4},
+        "driver": driver or model_driver_json(),
+        "sim": {
+            "simulator": "f1tenth_gym",
+            "sim_version": "0.2.1",
+            "sim_dt": 0.01,
+            "action_repeat": 4,
+            "ctrl_hz": 25,
+            "v_max_train": 8.0,
+            "seed": 42,
+        },
+        "result": {
+            "status": "completed" if lap_time_s is not None else "crashed",
+            "lap_time_s": lap_time_s,
+            "collision": lap_time_s is None,
+            "off_track_events": 0,
+            "max_speed_mps": 2.0,
+            "mean_speed_mps": 2.0,
+            "sample_count": frames,
+        },
+        "frames": {
+            "t": t,
+            "x": [round(2.0 * ti, 3) for ti in t],
+            "y": zeros,
+            "theta": zeros,
+            "v_long": [2.0] * frames,
+            "steer": zeros,
+            "throttle": [0.5] * frames,
+            "steer_rad": zeros,
+            "v_target": [2.0] * frames,
+            "progress": [round(i / frames, 4) for i in range(frames)],
+        },
+    }
 
 
 @pytest.fixture

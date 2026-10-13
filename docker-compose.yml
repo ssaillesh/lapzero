@@ -1,0 +1,25 @@
+# Local services (CLAUDE.md section 3). Only the database so far; api, mlflow and frontend are
+# added with the changes that need them. Values come from .env (copy .env.example).
+#
+#   docker compose up -d db
+#   alembic -c backend/alembic.ini upgrade head
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lapzero}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env, see .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-lapzero}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

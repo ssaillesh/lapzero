@@ -48,3 +48,7 @@ def test_control_rate_is_the_inverse_of_the_control_period() -> None:
 
 def test_training_speed_cap_never_exceeds_simulator_limit() -> None:
     assert 0.0 < contract.V_MAX_TRAIN <= contract.SIM_V_MAX
+
+
+def test_replay_rate_is_a_downsampling_of_the_control_rate() -> None:
+    assert 0 < contract.REPLAY_HZ <= contract.CTRL_HZ
