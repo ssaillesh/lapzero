@@ -2,7 +2,8 @@
  * Canvas drawing for the track map: a static layer (metric grid, track surface and edges,
  * centreline, the whole driven line, lap start) drawn once per size change into an offscreen
  * canvas, and a dynamic layer (the driven line so far, coloured by speed, and the car) drawn every
- * frame on top. Geometry and replay data stay in world metres; only the transform knows pixels.
+ * frame on top. A second, compared lap is drawn the same way in its own colour, under the main
+ * lap. Geometry and replay data stay in world metres; only the transform knows pixels.
  */
 
 import type { TrackGeometry } from "../api/types";
@@ -60,7 +61,20 @@ export const PALETTE = {
   accent: "#d2f34c",
   accentHalo: "rgba(210, 243, 76, 0.16)",
   carOutline: "#0b0c0e",
+  /** The compared lap: a cool blue that stays distinct from the accent's speed shades. */
+  compare: "#7cc4ff",
+  compareHalo: "rgba(124, 196, 255, 0.16)",
+  compareGhost: "rgba(124, 196, 255, 0.22)",
 } as const;
+
+/** Fill and halo of a car marker. */
+export interface CarColours {
+  fill: string;
+  halo: string;
+}
+
+export const MAIN_CAR: CarColours = { fill: PALETTE.accent, halo: PALETTE.accentHalo };
+export const COMPARE_CAR: CarColours = { fill: PALETTE.compare, halo: PALETTE.compareHalo };
 
 /** Speed bins of the driven line, slow to fast: the accent from dim to full strength. */
 export const SPEED_COLOURS = [
@@ -75,6 +89,8 @@ export const SPEED_COLOURS = [
 export interface Scene {
   geometry: TrackGeometry | null;
   replay: PreparedReplay | null;
+  /** A second lap drawn under the main one; omitted or null for none. */
+  compare?: PreparedReplay | null;
 }
 
 export interface Layout {
@@ -98,6 +114,7 @@ export function layoutScene(scene: Scene, width: number, height: number): Layout
     if (geometry.right !== null) sets.push(geometry.right);
   }
   if (replay !== null && replay.length > 0) sets.push(replay);
+  if (scene.compare != null && scene.compare.length > 0) sets.push(scene.compare);
   const bounds = boundsOf(sets);
   if (bounds === null) return null;
   const view = fitTransform(bounds, width, height, PADDING_PX);
@@ -179,11 +196,16 @@ function drawTrack(ctx: Canvas2D, view: ViewTransform, geometry: TrackGeometry):
   ctx.setLineDash([]);
 }
 
-function drawGhostLine(ctx: Canvas2D, view: ViewTransform, replay: PreparedReplay): void {
+function drawGhostLine(
+  ctx: Canvas2D,
+  view: ViewTransform,
+  replay: PreparedReplay,
+  colour: string = PALETTE.ghost,
+): void {
   if (replay.length < 2) return;
   ctx.beginPath();
   tracePolyline(ctx, view, replay, false);
-  ctx.strokeStyle = PALETTE.ghost;
+  ctx.strokeStyle = colour;
   ctx.lineWidth = 1.25;
   ctx.lineJoin = "round";
   ctx.stroke();
@@ -216,6 +238,7 @@ export function drawStaticLayer(ctx: Canvas2D, scene: Scene, layout: Layout): vo
   ctx.clearRect(0, 0, layout.width, layout.height);
   drawGrid(ctx, layout);
   if (scene.geometry !== null) drawTrack(ctx, layout.view, scene.geometry);
+  if (scene.compare != null) drawGhostLine(ctx, layout.view, scene.compare, PALETTE.compareGhost);
   if (scene.replay !== null) {
     drawGhostLine(ctx, layout.view, scene.replay);
     drawStart(ctx, layout.view, scene.replay);
@@ -255,18 +278,45 @@ export function drawTrace(
   ctx.stroke();
 }
 
+/** Draw the compared lap's line up to `sample` in one colour, ending at its car. */
+export function drawCompareTrace(
+  ctx: Canvas2D,
+  view: ViewTransform,
+  replay: PreparedReplay,
+  sample: ReplaySample,
+): void {
+  if (replay.length < 2) return;
+  const end = Math.min(sample.index, replay.length - 1);
+  ctx.beginPath();
+  ctx.moveTo(toCanvasX(view, replay.x[0] ?? 0), toCanvasY(view, replay.y[0] ?? 0));
+  for (let i = 1; i <= end; i++) {
+    ctx.lineTo(toCanvasX(view, replay.x[i] ?? 0), toCanvasY(view, replay.y[i] ?? 0));
+  }
+  ctx.lineTo(toCanvasX(view, sample.x), toCanvasY(view, sample.y));
+  ctx.strokeStyle = PALETTE.compare;
+  ctx.lineWidth = 1.75;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke();
+}
+
 /**
  * Draw the car at the sample: a chevron pointing along the heading. World theta is
  * counter-clockwise with y up; the canvas flips y, so the chevron rotates by -theta.
  */
-export function drawCar(ctx: Canvas2D, view: ViewTransform, sample: ReplaySample): void {
+export function drawCar(
+  ctx: Canvas2D,
+  view: ViewTransform,
+  sample: ReplaySample,
+  colours: CarColours = MAIN_CAR,
+): void {
   const x = toCanvasX(view, sample.x);
   const y = toCanvasY(view, sample.y);
   ctx.save();
   ctx.translate(x, y);
   ctx.beginPath();
   ctx.arc(0, 0, 12, 0, Math.PI * 2);
-  ctx.fillStyle = PALETTE.accentHalo;
+  ctx.fillStyle = colours.halo;
   ctx.fill();
   ctx.rotate(headingToCanvas(sample.theta));
   ctx.beginPath();
@@ -279,7 +329,7 @@ export function drawCar(ctx: Canvas2D, view: ViewTransform, sample: ReplaySample
   ctx.lineWidth = 2;
   ctx.strokeStyle = PALETTE.carOutline;
   ctx.stroke();
-  ctx.fillStyle = PALETTE.accent;
+  ctx.fillStyle = colours.fill;
   ctx.fill();
   ctx.restore();
 }

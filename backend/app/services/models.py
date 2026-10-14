@@ -2,7 +2,8 @@
 
 The backend must not import lapzero.training, so the alias name and the run param holding the
 contract version are repeated here; they match lapzero.training.tracking (ModelAlias.CHAMPION and
-contract_params()).
+contract_params()). An API without the registry reads the champion from a snapshot file instead
+(get_champion_from_snapshot).
 """
 
 from __future__ import annotations
@@ -11,7 +12,12 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
+
+from pydantic import ValidationError
+
+from lapzero.io.champion import read_champion_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -90,4 +96,37 @@ def get_champion(tracking_uri: str, model_name: str) -> ChampionVersion:
         contract_version=params.get(CONTRACT_VERSION_PARAM),
         tags=dict(version.tags),
         created_at=datetime.fromtimestamp(version.creation_timestamp / 1000, tz=UTC),
+    )
+
+
+def get_champion_from_snapshot(path: Path, model_name: str) -> ChampionVersion:
+    """Read the champion from a snapshot written by scripts/export_champion.py.
+
+    Args:
+        path: The CHAMPION_SNAPSHOT file.
+        model_name: Registered model the API reports on; the snapshot must be of this model.
+
+    Returns:
+        The champion version the snapshot recorded.
+
+    Raises:
+        ChampionNotFoundError: If the snapshot is of another model.
+        RegistryUnavailableError: If the file is missing or is not a valid snapshot.
+    """
+    try:
+        snapshot = read_champion_snapshot(path)
+    except (OSError, ValidationError) as error:
+        logger.error("champion snapshot %s cannot be read: %s", path, error)
+        raise RegistryUnavailableError(f"champion snapshot {path.name} cannot be read") from error
+    if snapshot.model_name != model_name:
+        raise ChampionNotFoundError(
+            f"champion snapshot {path.name} is of {snapshot.model_name}, not {model_name}"
+        )
+    return ChampionVersion(
+        model_name=snapshot.model_name,
+        version=snapshot.version,
+        run_id=snapshot.run_id,
+        contract_version=snapshot.contract_version,
+        tags=dict(snapshot.tags),
+        created_at=snapshot.created_at,
     )

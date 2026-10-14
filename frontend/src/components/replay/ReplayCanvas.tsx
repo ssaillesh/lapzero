@@ -7,9 +7,11 @@ import type { PreparedReplay } from "../../lib/replay";
 import { emptySample, sampleAt } from "../../lib/replay";
 import type { Layout } from "../../lib/trackRenderer";
 import {
+  COMPARE_CAR,
   PALETTE,
   SPEED_COLOURS,
   drawCar,
+  drawCompareTrace,
   drawStaticLayer,
   drawTrace,
   layoutScene,
@@ -24,6 +26,10 @@ interface ReplayCanvasProps {
   clock: PlaybackClock | null;
   /** Text alternative for the drawing. */
   description: string;
+  /** A second lap, drawn under the main one on the same clock; omitted or null for none. */
+  compare?: PreparedReplay | null;
+  /** Legend text for the compared lap, e.g. "human, 1:17.20". */
+  compareLabel?: string;
 }
 
 function useDevicePixelRatio(): number {
@@ -47,19 +53,27 @@ function useDevicePixelRatio(): number {
  * store is scaled by devicePixelRatio for sharp lines. The static layer is rendered offscreen
  * once per size, geometry or replay change; each frame blits it and draws the trace and car.
  */
-export function ReplayCanvas({ geometry, replay, clock, description }: ReplayCanvasProps) {
+export function ReplayCanvas({
+  geometry,
+  replay,
+  clock,
+  description,
+  compare = null,
+  compareLabel = "Compared lap",
+}: ReplayCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { width, height } = useElementSize(containerRef);
   const dpr = useDevicePixelRatio();
 
   const layout = useMemo<Layout | null>(
-    () => layoutScene({ geometry, replay }, width, height),
-    [geometry, replay, width, height],
+    () => layoutScene({ geometry, replay, compare }, width, height),
+    [geometry, replay, compare, width, height],
   );
   const bins = useMemo(() => (replay === null ? new Uint8Array(0) : speedBins(replay)), [replay]);
   const staticLayer = useRef<HTMLCanvasElement | null>(null);
   const sample = useRef(emptySample());
+  const compareSample = useRef(emptySample());
 
   const drawFrame = useCallback(
     (time: number) => {
@@ -72,11 +86,17 @@ export function ReplayCanvas({ geometry, replay, clock, description }: ReplayCan
       if (staticLayer.current !== null) context.drawImage(staticLayer.current, 0, 0);
       if (replay === null || replay.length === 0 || clock === null) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // The compared lap first, so the main lap's line and car stay on top.
+      if (compare !== null && compare.length > 0) {
+        sampleAt(compare, time, compareSample.current);
+        drawCompareTrace(context, layout.view, compare, compareSample.current);
+        drawCar(context, layout.view, compareSample.current, COMPARE_CAR);
+      }
       sampleAt(replay, time, sample.current);
       drawTrace(context, layout.view, replay, bins, sample.current);
       drawCar(context, layout.view, sample.current);
     },
-    [layout, replay, clock, bins, dpr],
+    [layout, replay, compare, clock, bins, dpr],
   );
 
   // Resize the backing store and rebuild the static layer.
@@ -97,14 +117,14 @@ export function ReplayCanvas({ geometry, replay, clock, description }: ReplayCan
       const context = offscreen.getContext("2d");
       if (context !== null) {
         context.setTransform(dpr, 0, 0, dpr, 0, 0);
-        drawStaticLayer(context, { geometry, replay }, layout);
+        drawStaticLayer(context, { geometry, replay, compare }, layout);
         staticLayer.current = offscreen;
       } else {
         staticLayer.current = null;
       }
     }
     drawFrame(clock?.getTime() ?? 0);
-  }, [width, height, dpr, layout, geometry, replay, clock, drawFrame]);
+  }, [width, height, dpr, layout, geometry, replay, compare, clock, drawFrame]);
 
   // Redraw on every clock frame. Subscribing calls drawFrame once immediately.
   useEffect(() => {
@@ -133,6 +153,7 @@ export function ReplayCanvas({ geometry, replay, clock, description }: ReplayCan
       <MapLegend
         layout={layout}
         replay={replay}
+        compareLabel={compare !== null && compare.length > 0 ? compareLabel : null}
         hasCentreline={geometry !== null}
         hasEdges={geometry?.left != null}
       />
@@ -144,11 +165,13 @@ export function ReplayCanvas({ geometry, replay, clock, description }: ReplayCan
 function MapLegend({
   layout,
   replay,
+  compareLabel,
   hasCentreline,
   hasEdges,
 }: {
   layout: Layout | null;
   replay: PreparedReplay | null;
+  compareLabel: string | null;
   hasCentreline: boolean;
   hasEdges: boolean;
 }) {
@@ -186,6 +209,16 @@ function MapLegend({
               }}
             />
             Driven line by speed, 0 to {formatSpeed(replay.maxSpeed)} m/s
+          </li>
+        )}
+        {compareLabel !== null && (
+          <li className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="h-[3px] w-6 rounded-full"
+              style={{ background: PALETTE.compare }}
+            />
+            {compareLabel}
           </li>
         )}
       </ul>

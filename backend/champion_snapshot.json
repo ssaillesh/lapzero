@@ -1,0 +1,18 @@
+{
+  "model_name": "lapzero-policy",
+  "version": "8",
+  "run_id": "b1e5e003993e476e95481fd35aa2ac3c",
+  "contract_version": "1.0.0",
+  "tags": {
+    "gate_champion_sweep": "01M4TGPRVQY5F71QAQKBSR5RKQ",
+    "replaced_champion_version": "5",
+    "contract_version": "1.0.0",
+    "reward_version": "1.0.0",
+    "algorithm": "ppo",
+    "gate_challenger_sweep": "01M4TH84XCQYGAD34XR0C5BTDH",
+    "gate_track": "oschersleben",
+    "gate_result": "promote"
+  },
+  "created_at": "2026-10-13T11:16:16.202000Z",
+  "exported_at": "2026-10-14T06:18:29Z"
+}

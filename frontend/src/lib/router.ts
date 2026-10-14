@@ -5,7 +5,7 @@
  *   /leaderboard?track=<id>&driver=<human|model>&limit=<n>
  *   /tracks
  *   /tracks/<track_id>
- *   /tracks/<track_id>/replays/<lap_id>
+ *   /tracks/<track_id>/replays/<lap_id>?vs=<lap_id>   (vs: a second lap to compare with)
  *   /governance
  * "/" redirects to /leaderboard. Anything else is a not-found route.
  */
@@ -28,7 +28,7 @@ export type Route =
   | { name: "home" }
   | { name: "leaderboard"; params: LeaderboardParams }
   | { name: "tracks" }
-  | { name: "track"; trackId: string; lapId: string | null }
+  | { name: "track"; trackId: string; lapId: string | null; compareLapId?: string }
   | { name: "governance" }
   | { name: "not-found"; path: string };
 
@@ -71,7 +71,9 @@ export function parseRoute(pathname: string, search: string): Route {
     if (trackId !== null && third === undefined) return { name: "track", trackId, lapId: null };
     if (trackId !== null && third === "replays" && fourth !== undefined && rest.length === 0) {
       const lapId = decodeSegment(fourth);
-      if (lapId !== null) return { name: "track", trackId, lapId };
+      const compareLapId = query.get("vs") || null;
+      if (lapId !== null)
+        return { name: "track", trackId, lapId, ...(compareLapId !== null && { compareLapId }) };
     }
   }
   return { name: "not-found", path: pathname };
@@ -95,7 +97,10 @@ export function hrefFor(route: Exclude<Route, { name: "not-found" }>): string {
       return "/tracks";
     case "track": {
       const track = `/tracks/${encodeURIComponent(route.trackId)}`;
-      return route.lapId === null ? track : `${track}/replays/${encodeURIComponent(route.lapId)}`;
+      if (route.lapId === null) return track;
+      const replay = `${track}/replays/${encodeURIComponent(route.lapId)}`;
+      const vs = route.compareLapId;
+      return vs === undefined ? replay : `${replay}?vs=${encodeURIComponent(vs)}`;
     }
     case "governance":
       return "/governance";

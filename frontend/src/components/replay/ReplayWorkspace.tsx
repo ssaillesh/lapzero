@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import type { Replay, TrackGeometry } from "../../api/types";
 import { useReplayPlayback } from "../../hooks/useReplayPlayback";
-import { formatLapTime, formatSpeed } from "../../lib/formatters";
+import { compareLabel, formatLapTime, formatSpeed } from "../../lib/formatters";
 import type { PlaybackClock } from "../../lib/playback";
 import { prepareReplay } from "../../lib/replay";
 import { Notice, Skeleton } from "../common/States";
@@ -62,15 +62,32 @@ interface ReplayWorkspaceProps {
   replay: Replay;
   geometry: TrackGeometry | null;
   trackName: string;
+  /** A second lap on the same track, raced against `replay` on the same clock; null for none. */
+  compare?: Replay | null;
 }
 
 /**
  * One lap's replay: map, transport, readout and charts, all driven by one clock. Render it with
- * key={lap_id} so each lap gets a fresh clock; nothing plays until the user presses play.
+ * key={lap_id} (and the compared lap's ID) so each pairing gets a fresh clock; nothing plays
+ * until the user presses play. With a compared lap the clock runs to the end of the longer lap,
+ * and the car that finishes first waits at its last sample.
  */
-export function ReplayWorkspace({ replay, geometry, trackName }: ReplayWorkspaceProps) {
+export function ReplayWorkspace({
+  replay,
+  geometry,
+  trackName,
+  compare = null,
+}: ReplayWorkspaceProps) {
   const prepared = useMemo(() => prepareReplay(replay.points), [replay.points]);
-  const { clock, snapshot } = useReplayPlayback(prepared.duration);
+  const preparedCompare = useMemo(
+    () => (compare === null ? null : prepareReplay(compare.points)),
+    [compare],
+  );
+  const racing = compare !== null && preparedCompare !== null && preparedCompare.length > 0;
+  const duration = racing
+    ? Math.max(prepared.duration, preparedCompare.duration)
+    : prepared.duration;
+  const { clock, snapshot } = useReplayPlayback(duration);
   usePlaybackShortcuts(clock);
 
   const description =
@@ -78,6 +95,7 @@ export function ReplayWorkspace({ replay, geometry, trackName }: ReplayWorkspace
     (replay.lap_time_s === null
       ? ", a lap that did not finish"
       : `, lap time ${formatLapTime(replay.lap_time_s)}`) +
+    (racing ? `, compared with ${compareLabel(replay, compare)}` : "") +
     `. Top speed ${formatSpeed(prepared.maxSpeed)} metres per second. The readout below the controls gives the car's current values.`;
 
   if (prepared.length === 0) {
@@ -97,6 +115,8 @@ export function ReplayWorkspace({ replay, geometry, trackName }: ReplayWorkspace
           replay={prepared}
           clock={clock}
           description={description}
+          compare={racing ? preparedCompare : null}
+          {...(racing && { compareLabel: compareLabel(replay, compare) })}
         />
       </MapFrame>
       <ReplayControls clock={clock} snapshot={snapshot} />

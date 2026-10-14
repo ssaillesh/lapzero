@@ -12,6 +12,7 @@ _KEYS = (
     "DATABASE_URL",
     "MLFLOW_TRACKING_URI",
     "MLFLOW_MODEL_NAME",
+    "CHAMPION_SNAPSHOT",
     "CORS_ORIGINS",
     "ENVIRONMENT",
     "LAPS_DIR",
@@ -129,6 +130,16 @@ def test_a_broken_json_list_of_cors_origins_is_rejected(
 
     with pytest.raises(ValidationError, match=message):
         Settings(_env_file=None)
+
+
+def test_champion_comes_from_the_registry_unless_a_snapshot_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(_env_file=None).champion_snapshot is None
+
+    monkeypatch.setenv("CHAMPION_SNAPSHOT", "backend/champion_snapshot.json")
+
+    assert Settings(_env_file=None).champion_snapshot == Path("backend/champion_snapshot.json")
 
 
 def test_dotenv_file_is_read_and_its_container_only_keys_are_ignored(tmp_path: Path) -> None:

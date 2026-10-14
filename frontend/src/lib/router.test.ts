@@ -77,3 +77,40 @@ describe("navigate", () => {
     expect(window.history.length).toBe(before + 1);
   });
 });
+
+describe("comparison lap (?vs=)", () => {
+  it("reads the lap to compare with on a replay URL", () => {
+    expect(parseRoute("/tracks/spielberg/replays/A1", "?vs=B2")).toEqual({
+      name: "track",
+      trackId: "spielberg",
+      lapId: "A1",
+      compareLapId: "B2",
+    });
+  });
+
+  it("ignores it without an open lap, or when empty", () => {
+    expect(parseRoute("/tracks/spielberg", "?vs=B2")).toStrictEqual({
+      name: "track",
+      trackId: "spielberg",
+      lapId: null,
+    });
+    expect(parseRoute("/tracks/spielberg/replays/A1", "?vs=")).toStrictEqual({
+      name: "track",
+      trackId: "spielberg",
+      lapId: "A1",
+    });
+  });
+
+  it("round-trips through hrefFor, encoded", () => {
+    const route = {
+      name: "track",
+      trackId: "spielberg",
+      lapId: "A1",
+      compareLapId: "B 2",
+    } as const;
+    const href = hrefFor(route);
+    expect(href).toBe("/tracks/spielberg/replays/A1?vs=B%202");
+    const [path = "", search = ""] = href.split("?");
+    expect(parseRoute(path, `?${search}`)).toEqual(route);
+  });
+});

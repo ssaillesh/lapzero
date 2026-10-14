@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
@@ -7,6 +8,7 @@ import { App } from "../App";
 import {
   LAP_P1,
   LAP_P2,
+  LAP_P3,
   TRACKS,
   champion,
   leaderboard,
@@ -113,5 +115,86 @@ describe("Track Explorer", () => {
       expect(window.location.pathname).toBe(`/tracks/oschersleben/replays/${LAP_P1}`);
     });
     expect(getTrack).not.toHaveBeenCalledWith("spielberg_wide", expect.anything());
+  });
+
+  describe("comparing two laps", () => {
+    /** The champion's lap (P1) normally; P3 is a human, Mara Okafor, 59.60. */
+    function mockRace(compareTrack = "spielberg") {
+      const getReplay = mockApi();
+      getReplay.mockImplementation((lapId) =>
+        Promise.resolve(
+          lapId === LAP_P3
+            ? {
+                ...straightReplay(LAP_P3, compareTrack),
+                driver_label: "Mara Okafor",
+                lap_time_s: 59.6,
+              }
+            : straightReplay(lapId),
+        ),
+      );
+      return getReplay;
+    }
+
+    it("races a second lap picked from the list and puts it in the URL", async () => {
+      const getReplay = mockRace();
+      const user = userEvent.setup();
+      open(`/tracks/spielberg/replays/${LAP_P1}`);
+      const picker = await screen.findByLabelText("Compare with");
+      const options = within(picker)
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+      expect(options).toEqual(["No comparison", "P2 AI v5, 46.78", "P3 Mara Okafor, 59.60"]);
+
+      await user.selectOptions(picker, LAP_P3);
+
+      await waitFor(() => {
+        expect(window.location.search).toBe(`?vs=${LAP_P3}`);
+      });
+      expect(window.location.pathname).toBe(`/tracks/spielberg/replays/${LAP_P1}`);
+      expect(await screen.findByText("Mara Okafor, 59.60 (+13.62 s)")).toBeInTheDocument();
+      expect(getReplay).toHaveBeenCalledWith(LAP_P3, expect.anything());
+    });
+
+    it("opens a comparison from the URL and clears it on request", async () => {
+      mockRace();
+      const user = userEvent.setup();
+      open(`/tracks/spielberg/replays/${LAP_P1}?vs=${LAP_P3}`);
+      expect(await screen.findByText("Mara Okafor, 59.60 (+13.62 s)")).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText("Compare with"), "");
+
+      await waitFor(() => {
+        expect(window.location.search).toBe("");
+      });
+      expect(screen.queryByText("Mara Okafor, 59.60 (+13.62 s)")).not.toBeInTheDocument();
+      expect(screen.getByRole("img", { name: /Map of spielberg/ })).not.toHaveAccessibleName(
+        /compared with/,
+      );
+    });
+
+    it("shows only the open lap when the compared one is on another track", async () => {
+      mockRace("oschersleben");
+      open(`/tracks/spielberg/replays/${LAP_P1}?vs=${LAP_P3}`);
+      expect(await screen.findByText(/driven on oschersleben, not this track/)).toBeInTheDocument();
+      expect(screen.queryByText("Mara Okafor, 59.60 (+13.62 s)")).not.toBeInTheDocument();
+      expect(screen.getByRole("img", { name: /Map of spielberg/ })).not.toHaveAccessibleName(
+        /compared with/,
+      );
+    });
+
+    it("says when the lap to compare with does not exist", async () => {
+      mockApi().mockImplementation((lapId) =>
+        lapId === LAP_P3
+          ? Promise.reject(new ApiError({ kind: "http", url: "u", status: 404, detail: null }))
+          : Promise.resolve(straightReplay(lapId)),
+      );
+      open(`/tracks/spielberg/replays/${LAP_P1}?vs=${LAP_P3}`);
+      expect(
+        await screen.findByText(
+          "The lap to compare with was not found, so only the open lap is shown.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+    });
   });
 });

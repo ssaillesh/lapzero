@@ -13,13 +13,18 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 @router.get("/champion")
 def get_champion(settings: SettingsDep) -> ChampionResponse:
-    """Return the champion version from the MLflow model registry.
+    """Return the champion version from the MLflow model registry, or from CHAMPION_SNAPSHOT.
 
-    Responds 404 if the model is not registered or has no champion, and 503 if the registry
-    cannot be read.
+    Responds 404 if the model is not registered or has no champion (or the snapshot is of another
+    model), and 503 if the registry or the snapshot cannot be read.
     """
     try:
-        champion = models.get_champion(settings.mlflow_tracking_uri, settings.mlflow_model_name)
+        if settings.champion_snapshot is not None:
+            champion = models.get_champion_from_snapshot(
+                settings.champion_snapshot, settings.mlflow_model_name
+            )
+        else:
+            champion = models.get_champion(settings.mlflow_tracking_uri, settings.mlflow_model_name)
     except models.ChampionNotFoundError as error:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
     except models.RegistryUnavailableError as error:

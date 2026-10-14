@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from lapzero.io.champion import ChampionSnapshot, write_champion_snapshot
 from lapzero.io.telemetry import TRACK_ID_PATTERN, ULID_PATTERN
 from lapzero.training.tracking import REGISTERED_MODEL, ModelAlias, mlflow_client
 
@@ -31,6 +34,13 @@ DEFAULT_GATE_TRACK: Final = "oschersleben"
 """Track the release gate sweeps run on unless told otherwise."""
 GATE_PROMOTE: Final = "promote"
 """gate_result tag value of a version the release gate promoted."""
+CONTRACT_VERSION_PARAM: Final = "contract.CONTRACT_VERSION"
+"""Run param holding the contract version; contract_params() logs it on every training run."""
+
+
+def _utc_now() -> datetime:
+    """Current UTC time to the second."""
+    return datetime.now(UTC).replace(microsecond=0)
 
 
 def get_tracking_uri() -> str:
@@ -60,6 +70,49 @@ def get_champion_version(
     """
     client = mlflow_client(tracking_uri or get_tracking_uri())
     return _alias_version(_aliases(client, model_name), ModelAlias.CHAMPION, model_name)
+
+
+def export_champion(
+    path: Path,
+    *,
+    tracking_uri: str | None = None,
+    model_name: str = REGISTERED_MODEL,
+    clock: Callable[[], datetime] = _utc_now,
+) -> ChampionSnapshot:
+    """Write the champion's registry metadata to a snapshot file, for an API without MLflow.
+
+    The snapshot holds what GET /api/models/champion reports (version, run, contract version,
+    tags, registration time) and when it was taken; no weights. Re-export after a promotion.
+
+    Args:
+        path: JSON file to write, e.g. backend/champion_snapshot.json; replaced if it exists.
+        tracking_uri: MLflow tracking URI holding the registry; defaults to get_tracking_uri().
+        model_name: Registered model name.
+        clock: Returns the current UTC time; injectable for tests.
+
+    Returns:
+        The snapshot written.
+
+    Raises:
+        mlflow.exceptions.MlflowException: If the model or its champion alias does not exist.
+    """
+    client = mlflow_client(tracking_uri or get_tracking_uri())
+    version = client.get_model_version_by_alias(model_name, ModelAlias.CHAMPION)
+    params = client.get_run(version.run_id).data.params if version.run_id else {}
+    snapshot = ChampionSnapshot(
+        model_name=model_name,
+        version=str(version.version),
+        run_id=version.run_id or None,
+        contract_version=params.get(CONTRACT_VERSION_PARAM),
+        tags=dict(version.tags),
+        created_at=datetime.fromtimestamp(version.creation_timestamp / 1000, tz=UTC),
+        exported_at=clock(),
+    )
+    write_champion_snapshot(path, snapshot)
+    logger.info(
+        "wrote %s version %s (%s) to %s", model_name, snapshot.version, ModelAlias.CHAMPION, path
+    )
+    return snapshot
 
 
 def promote_challenger(

@@ -13,7 +13,9 @@ from backend.app.services.models import (
     ChampionNotFoundError,
     RegistryUnavailableError,
     get_champion,
+    get_champion_from_snapshot,
 )
+from lapzero.io.champion import ChampionSnapshot, write_champion_snapshot
 from lapzero.training.tracking import ModelAlias, contract_params, mlflow_client
 from tests.conftest import register_model_versions
 
@@ -98,3 +100,52 @@ def test_file_store_is_allowed_when_the_environment_does_not_say(
         get_champion(tracking_uri, MODEL)
 
     assert os.environ["MLFLOW_ALLOW_FILE_STORE"] == "true"
+
+
+# Champion snapshot (an API without the registry)
+
+SNAPSHOT = ChampionSnapshot(
+    model_name=MODEL,
+    version="8",
+    run_id="b1e5e003993e476e95481fd35aa2ac3c",
+    contract_version="1.0.0",
+    tags={"gate_result": "promote", "replaced_champion_version": "5"},
+    created_at=datetime(2026, 10, 13, 11, 16, 2, tzinfo=UTC),
+    exported_at=datetime(2026, 10, 14, 6, 30, tzinfo=UTC),
+)
+
+
+def test_snapshot_champion_matches_what_the_registry_would_report(tmp_path: Path) -> None:
+    path = tmp_path / "champion_snapshot.json"
+    write_champion_snapshot(path, SNAPSHOT)
+
+    champion = get_champion_from_snapshot(path, MODEL)
+
+    assert (champion.model_name, champion.version, champion.run_id) == (
+        MODEL,
+        "8",
+        "b1e5e003993e476e95481fd35aa2ac3c",
+    )
+    assert champion.contract_version == "1.0.0"
+    assert champion.tags == {"gate_result": "promote", "replaced_champion_version": "5"}
+    assert champion.created_at == datetime(2026, 10, 13, 11, 16, 2, tzinfo=UTC)
+
+
+def test_snapshot_of_another_model_is_not_found(tmp_path: Path) -> None:
+    path = tmp_path / "champion_snapshot.json"
+    write_champion_snapshot(path, SNAPSHOT)
+
+    with pytest.raises(ChampionNotFoundError, match="other-policy"):
+        get_champion_from_snapshot(path, "other-policy")
+
+
+@pytest.mark.parametrize("content", [None, "not json", '{"model_name": "test-policy"}'])
+def test_missing_or_invalid_snapshot_means_the_registry_is_unavailable(
+    tmp_path: Path, content: str | None
+) -> None:
+    path = tmp_path / "champion_snapshot.json"
+    if content is not None:
+        path.write_text(content)
+
+    with pytest.raises(RegistryUnavailableError, match=r"champion_snapshot\.json cannot be read"):
+        get_champion_from_snapshot(path, MODEL)

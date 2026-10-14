@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compareLabel,
   formatGap,
   formatHeading,
   formatLapTime,
@@ -65,5 +66,24 @@ describe("other formatters", () => {
     expect(majorVersion("1.1.0")).toBe("1");
     expect(majorVersion("12.0.3")).toBe("12");
     expect(majorVersion("v1")).toBeNull();
+  });
+});
+
+describe("compareLabel", () => {
+  const champion = { driver_label: "AI v8", lap_time_s: 51.6 };
+  const human = { driver_label: "human", lap_time_s: 77.2 };
+
+  it("names the compared driver, their lap time and the gap to the open lap", () => {
+    expect(compareLabel(champion, human)).toBe("human, 1:17.20 (+25.60 s)");
+    expect(compareLabel(human, champion)).toBe("AI v8, 51.60 (-25.60 s)");
+  });
+
+  it("drops the gap when the open lap did not finish, and says so for the compared one", () => {
+    expect(compareLabel({ driver_label: "human", lap_time_s: null }, champion)).toBe(
+      "AI v8, 51.60",
+    );
+    expect(compareLabel(champion, { driver_label: "human", lap_time_s: null })).toBe(
+      "human, did not finish",
+    );
   });
 });

@@ -4,8 +4,11 @@ import { squareTrack, straightReplay } from "../test/fixtures";
 import { emptySample, prepareReplay, sampleAt } from "./replay";
 import type { Canvas2D } from "./trackRenderer";
 import {
+  COMPARE_CAR,
+  PALETTE,
   SPEED_COLOURS,
   drawCar,
+  drawCompareTrace,
   drawStaticLayer,
   drawTrace,
   layoutScene,
@@ -119,5 +122,60 @@ describe("drawStaticLayer", () => {
     drawStaticLayer(ctx, { geometry: squareTrack().geometry, replay }, layout);
     expect(calls).toContainEqual(["fill", "evenodd"]);
     expect(calls).toContainEqual(["fillText", "START", expect.any(Number), expect.any(Number)]);
+  });
+});
+
+describe("a compared lap", () => {
+  const main = prepareReplay(straightReplay().points); // x from 0 to 10 m along y = 0
+  const far = straightReplay().points;
+  const compare = prepareReplay({ ...far, x: far.x.map((x) => x + 100) }); // x from 100 to 110 m
+
+  it("is fitted into the map with the open lap", () => {
+    const alone = layoutScene({ geometry: null, replay: main }, 800, 400);
+    const both = layoutScene({ geometry: null, replay: main, compare }, 800, 400);
+    expect(alone).not.toBeNull();
+    expect(both).not.toBeNull();
+    if (alone === null || both === null) return;
+    expect(toCanvasX(alone.view, 110)).toBeGreaterThan(800); // off the map without it
+    expect(toCanvasX(both.view, 110)).toBeLessThanOrEqual(800);
+  });
+
+  it("adds its whole line, faintly, to the static layer", () => {
+    const layout = layoutScene({ geometry: null, replay: main, compare }, 800, 400);
+    if (layout === null) throw new Error("no layout");
+    const without = recordingContext();
+    drawStaticLayer(without.ctx, { geometry: null, replay: main }, layout);
+    const withCompare = recordingContext();
+    drawStaticLayer(withCompare.ctx, { geometry: null, replay: main, compare }, layout);
+    const strokes = (calls: Call[]) => calls.filter(([name]) => name === "stroke").length;
+    expect(strokes(withCompare.calls)).toBe(strokes(without.calls) + 1);
+  });
+
+  it("is traced in its own colour from its start to its car", () => {
+    const layout = layoutScene({ geometry: null, replay: compare }, 800, 400);
+    if (layout === null) throw new Error("no layout");
+    const sample = sampleAt(compare, 1.05, emptySample());
+    const { ctx, calls } = recordingContext();
+    drawCompareTrace(ctx, layout.view, compare, sample);
+    expect(ctx.strokeStyle).toBe(PALETTE.compare);
+    expect(calls.filter(([name]) => name === "stroke")).toHaveLength(1);
+    expect(calls.find(([name]) => name === "moveTo")).toEqual([
+      "moveTo",
+      toCanvasX(layout.view, 100),
+      toCanvasY(layout.view, 0),
+    ]);
+    expect(calls.at(-2)).toEqual([
+      "lineTo",
+      toCanvasX(layout.view, sample.x),
+      toCanvasY(layout.view, sample.y),
+    ]);
+  });
+
+  it("drives a car in the compared colours", () => {
+    const layout = layoutScene({ geometry: null, replay: compare }, 800, 400);
+    if (layout === null) throw new Error("no layout");
+    const { ctx } = recordingContext();
+    drawCar(ctx, layout.view, sampleAt(compare, 0, emptySample()), COMPARE_CAR);
+    expect(ctx.fillStyle).toBe(PALETTE.compare);
   });
 });

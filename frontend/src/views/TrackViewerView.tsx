@@ -55,8 +55,16 @@ export function TrackIndexView() {
   );
 }
 
-/** /tracks/:trackId and /tracks/:trackId/replays/:lapId. */
-export function TrackViewerView({ trackId, lapId }: { trackId: string; lapId: string | null }) {
+/** /tracks/:trackId and /tracks/:trackId/replays/:lapId, optionally ?vs=<lap_id> to compare. */
+export function TrackViewerView({
+  trackId,
+  lapId,
+  compareLapId = null,
+}: {
+  trackId: string;
+  lapId: string | null;
+  compareLapId?: string | null;
+}) {
   // A hidden track is never shown, even from a direct URL: open the first visible track instead.
   const hidden = isHiddenTrack(trackId);
   useEffect(() => {
@@ -67,6 +75,8 @@ export function TrackViewerView({ trackId, lapId }: { trackId: string; lapId: st
   const track = useTrack(hidden ? null : trackId);
   const laps = useLeaderboard(hidden ? null : trackId, null, LEADERBOARD_MAX_LIMIT);
   const replay = useReplay(hidden ? null : lapId);
+  const compareId = hidden || lapId === null || compareLapId === lapId ? null : compareLapId;
+  const compare = useReplay(compareId);
   const champion = useChampion();
   const championData = champion.status === "success" ? champion.data : null;
 
@@ -130,6 +140,8 @@ export function TrackViewerView({ trackId, lapId }: { trackId: string; lapId: st
           <ReplayArea
             trackId={trackId}
             lapId={lapId}
+            compareLapId={compareId}
+            compare={compare}
             track={track.status === "success" ? track.data : null}
             replay={replay}
             laps={laps}
@@ -164,13 +176,24 @@ function TrackHeader({ track }: { track: Resource<TrackDetail> }) {
 interface ReplayAreaProps {
   trackId: string;
   lapId: string | null;
+  compareLapId: string | null;
+  compare: Resource<Replay>;
   track: TrackDetail | null;
   replay: Resource<Replay>;
   laps: Resource<{ entries: LeaderboardEntry[] }>;
   champion: ChampionResponse | null;
 }
 
-function ReplayArea({ trackId, lapId, track, replay, laps, champion }: ReplayAreaProps) {
+function ReplayArea({
+  trackId,
+  lapId,
+  compareLapId,
+  compare,
+  track,
+  replay,
+  laps,
+  champion,
+}: ReplayAreaProps) {
   const geometry = track?.geometry ?? null;
   const trackOnly = (
     <MapFrame>
@@ -249,6 +272,8 @@ function ReplayArea({ trackId, lapId, track, replay, laps, champion }: ReplayAre
     laps.status === "success"
       ? (laps.data.entries.find((candidate) => candidate.lap_id === lapId) ?? null)
       : null;
+  const compareReplay =
+    compare.status === "success" && compare.data.track_id === trackId ? compare.data : null;
   return (
     <>
       <LapSummary
@@ -256,14 +281,82 @@ function ReplayArea({ trackId, lapId, track, replay, laps, champion }: ReplayAre
         entry={entry}
         champion={entry !== null && isChampion(entry, champion)}
       />
+      {laps.status === "success" && (
+        <ComparePicker
+          trackId={trackId}
+          lapId={lapId}
+          entries={laps.data.entries}
+          compareLapId={compareLapId}
+        />
+      )}
+      {compareLapId !== null && <CompareNotice trackId={trackId} compare={compare} />}
       <ReplayWorkspace
-        key={replay.data.lap_id}
+        key={`${replay.data.lap_id}|${compareReplay?.lap_id ?? ""}`}
         replay={replay.data}
         geometry={geometry}
         trackName={track.name}
+        compare={compareReplay}
       />
     </>
   );
+}
+
+interface ComparePickerProps {
+  trackId: string;
+  lapId: string;
+  entries: LeaderboardEntry[];
+  compareLapId: string | null;
+}
+
+/** Pick a second ranked lap on this track to race against the open one (?vs= in the URL). */
+function ComparePicker({ trackId, lapId, entries, compareLapId }: ComparePickerProps) {
+  const others = entries.filter((candidate) => candidate.lap_id !== lapId);
+  if (others.length === 0) return null;
+  return (
+    <SelectField
+      label="Compare with"
+      value={compareLapId ?? ""}
+      className="sm:max-w-sm"
+      onChange={(value) => {
+        navigate(
+          hrefFor({ name: "track", trackId, lapId, ...(value !== "" && { compareLapId: value }) }),
+          { keepScroll: true },
+        );
+      }}
+    >
+      <option value="">No comparison</option>
+      {compareLapId !== null && !others.some((e) => e.lap_id === compareLapId) && (
+        <option value={compareLapId}>Lap {compareLapId} (opened by link)</option>
+      )}
+      {others.map((e) => (
+        <option key={e.lap_id} value={e.lap_id}>
+          P{e.rank} {e.driver_label}, {formatLapTime(e.lap_time_s)}
+        </option>
+      ))}
+    </SelectField>
+  );
+}
+
+/** Why the lap named by ?vs= is not drawn, when it cannot be. */
+function CompareNotice({ trackId, compare }: { trackId: string; compare: Resource<Replay> }) {
+  if (compare.status === "error") {
+    return (
+      <Notice tone="warn">
+        {isHttpStatus(compare.error, 404) || isHttpStatus(compare.error, 422)
+          ? "The lap to compare with was not found, so only the open lap is shown."
+          : "The lap to compare with could not be loaded, so only the open lap is shown."}
+      </Notice>
+    );
+  }
+  if (compare.status === "success" && compare.data.track_id !== trackId) {
+    return (
+      <Notice tone="warn">
+        The lap to compare with was driven on {compare.data.track_id}, not this track, so only the
+        open lap is shown.
+      </Notice>
+    );
+  }
+  return null;
 }
 
 function LapSummarySkeleton() {

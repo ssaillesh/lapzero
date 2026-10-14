@@ -93,3 +93,20 @@ export function majorVersion(version: string): string | null {
   const match = /^(\d+)\.\d+\.\d+$/.exec(version);
   return match?.[1] ?? null;
 }
+
+/** The fields of a replay that name its driver and result. */
+interface LapIdentity {
+  driver_label: string;
+  lap_time_s: number | null;
+}
+
+/**
+ * Who a compared lap is and its gap to the open lap, e.g. "human, 1:17.20 (+25.60 s)".
+ * A lap that did not finish says so; the gap needs both lap times.
+ */
+export function compareLabel(open: LapIdentity, compared: LapIdentity): string {
+  if (compared.lap_time_s === null) return `${compared.driver_label}, did not finish`;
+  const time = `${compared.driver_label}, ${formatLapTime(compared.lap_time_s)}`;
+  if (open.lap_time_s === null) return time;
+  return `${time} (${formatGap(compared.lap_time_s - open.lap_time_s)} s)`;
+}

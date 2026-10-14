@@ -6,7 +6,7 @@
 [![State-space contract v1.1.0](https://img.shields.io/badge/state--space_contract-v1.1.0-6f42c1)](docs/contracts/state_space.md)
 [![mypy strict](https://img.shields.io/badge/mypy-strict-2a6db2)](pyproject.toml)
 [![ruff](https://img.shields.io/badge/lint-ruff-261230)](pyproject.toml)
-[![Tests: 1,104 Python + 153 frontend passed (local run)](https://img.shields.io/badge/tests-1104_Python_%2B_153_frontend_passed_%28local_run%29-2ea44f)](#verification)
+[![Tests: 1,147 Python + 168 frontend passed (local run)](https://img.shields.io/badge/tests-1147_Python_%2B_168_frontend_passed_%28local_run%29-2ea44f)](#verification)
 [![Line coverage: 99% (local run)](https://img.shields.io/badge/coverage-99%25_%28local_run%29-2ea44f)](#verification)
 
 LapZero trains a driving policy in [F1TENTH Gym](https://github.com/f1tenth/f1tenth_gym). It starts with behaviour cloning on a handful of human laps, then fine-tunes with PPO across several tracks and randomized tyre friction. The goal is a policy that is fast at nominal grip and still finishes laps when grip drops. The engineering effort goes into proving that. A binding state-space contract defines what counts as a lap. A friction sweep measures every candidate the same way. A release gate decides promotion from two sweep reports. MLflow aliases only move when the evaluated versions are still the ones the registry points at.
@@ -16,7 +16,7 @@ LapZero trains a driving policy in [F1TENTH Gym](https://github.com/f1tenth/f1te
 [Demo](#demo) · [Dashboard](#dashboard) · [Results](#results-champion-v8-on-oschersleben) · [Architecture](#architecture) · [Lap contract](#state-space-contract-v110-and-lap-validity) · [Domain randomization](#domain-randomization-and-robustness) · [Registry and release gate](#model-registry-and-release-gate) · [Inference](#inference-engine) · [Quickstart](#quickstart) · [Limitations](#limitations-and-reproducibility)
 
 > [!NOTE]
-> The test and coverage badges are static. They record a local run on 2026-10-14 at commit `9654899` because the repository has no CI workflow yet. See [Verification](#verification) for the exact commands and results.
+> The test and coverage badges are static. They record a local run on 2026-10-14 (base commit `2124590` plus the champion snapshot and lap comparison) because the repository has no CI workflow yet. See [Verification](#verification) for the exact commands and results.
 
 ---
 
@@ -42,6 +42,13 @@ A FastAPI backend stores uploaded laps in PostgreSQL, and a React dashboard show
 
 **Track Explorer.** Champion v8's lap of Spielberg (51.60 s) replayed on the track and paused at 31 s. The driven line is coloured by speed, and the readout below the map follows the replay.
 
+<p align="center">
+  <img src="docs/assets/dashboard-compare.png" width="900"
+       alt="Champion v8's Spielberg lap raced against the best human lap: at 1:10 the champion waits at the finish while the human is still on the last corners">
+</p>
+
+**Human vs. champion.** "Compare with" races a second lap on the same clock: the open lap's line and car in the accent colour, the compared lap's in blue. At 1:10 the champion has finished (51.60 s) and waits at the line, while the best human lap (1:17.20, +25.60 s) is still on the last corners. The comparison is part of the URL (`?vs=<lap_id>`), so it survives a refresh and can be shared.
+
 <table>
   <tr>
     <td width="50%"><img src="docs/assets/dashboard-leaderboard.png"
@@ -51,7 +58,7 @@ A FastAPI backend stores uploaded laps in PostgreSQL, and a React dashboard show
   </tr>
   <tr>
     <td><b>Leaderboard.</b> Each driver's fastest completed lap on a track. On Spielberg, champion v8 (51.60 s) leads the best human lap (1:17.20).</td>
-    <td><b>Governance.</b> The registry's champion and the release-gate evidence tagged on it: the verdict, the gate track, the version it replaced and both sweep IDs.</td>
+    <td><b>Governance.</b> The registry's champion and the release-gate evidence tagged on it: the verdict, the gate track, the version it replaced and both sweep IDs. A hosted API without the registry serves the same data from a <a href="#5-run-the-dashboard">champion snapshot</a>.</td>
   </tr>
 </table>
 
@@ -70,8 +77,8 @@ The screenshots come from the local stack on 2026-10-14, with the API reading th
 | Governance | Promotion refuses if either alias moved after its sweep; evidence is tagged on the new champion | [`registry.py`](lapzero/registry.py) |
 | Reproducibility | Every run logs all contract constants, hyperparameters, seed, track IDs and git commit | [`training/tracking.py`](lapzero/training/tracking.py) |
 | Typed I/O | Frozen Pydantic models reject NaN, inf and unknown fields | [`inference/schemas.py`](lapzero/inference/schemas.py), [`io/telemetry.py`](lapzero/io/telemetry.py) |
-| Dashboard | Uploaded laps are validated against the contract, stored in PostgreSQL and served to a leaderboard, a replay viewer and a governance page | [`backend/app/`](backend/app), [`frontend/`](frontend) |
-| Quality bar | 1,104 Python tests (25 property-based) and 153 frontend tests, 99 % line coverage, `mypy --strict`, ruff, strict TypeScript and ESLint | [`tests/`](tests), [`frontend/src/`](frontend/src) |
+| Dashboard | Uploaded laps are validated against the contract, stored in PostgreSQL and served to a leaderboard, a replay viewer that races two laps against each other, and a governance page | [`backend/app/`](backend/app), [`frontend/`](frontend) |
+| Quality bar | 1,147 Python tests (25 property-based) and 168 frontend tests, 99 % line coverage, `mypy --strict`, ruff, strict TypeScript and ESLint | [`tests/`](tests), [`frontend/src/`](frontend/src) |
 
 ---
 
@@ -217,8 +224,8 @@ Every box above imports its constants from [`lapzero/contract.py`](lapzero/contr
 | Evaluation | [`lapzero/eval/`](lapzero/eval) | Deterministic one-lap rollouts, friction sweeps, per-episode CSV traces, the gate decision, and the champion lap that `rollout.py` records and uploads to the API | The gate reads only `sweep.json` files. It never runs the simulator or touches the registry |
 | Release | [`lapzero/registry.py`](lapzero/registry.py) | Moves `champion` to the evaluated challenger and tags the evidence | Only called by `scripts/eval_gate.py --promote` after a PROMOTE verdict |
 | Inference | [`lapzero/inference/`](lapzero/inference) | Loads a policy and drives it step by step, streaming typed telemetry | See [Inference engine](#inference-engine) for exactly what it depends on |
-| Backend | [`backend/app/`](backend/app) | `POST /api/laps` validates telemetry with the contract's Pydantic models, refuses another contract major version, then stores the lap, its file and a 10 Hz replay. Read endpoints serve tracks, leaderboards, replays and the registry's champion | Imports only `lapzero.contract` and `lapzero.io`, never `sim` or `training`. Schema changes go through Alembic |
-| Dashboard | [`frontend/`](frontend) | Leaderboard, Track Explorer (canvas replay with telemetry) and governance views | Talks only to the API, through one client that decodes every response |
+| Backend | [`backend/app/`](backend/app) | `POST /api/laps` validates telemetry with the contract's Pydantic models, refuses another contract major version, then stores the lap, its file and a 10 Hz replay. Read endpoints serve tracks, leaderboards, replays and the registry's champion, or a snapshot of it where there is no registry | Imports only `lapzero.contract` and `lapzero.io`, never `sim` or `training`. Schema changes go through Alembic |
+| Dashboard | [`frontend/`](frontend) | Leaderboard, Track Explorer (canvas replay with telemetry, and a second lap to race against) and governance views | Talks only to the API, through one client that decodes every response |
 
 Training, evaluation and inference do not share a process or talk to each other directly. They communicate through files (`data/laps/`, `models/*.pt`, `sweep.json`) and the MLflow store under `mlruns/`. The dashboard sees only what reaches the API: laps uploaded to `POST /api/laps`, and the champion alias read from the registry.
 
@@ -383,14 +390,14 @@ scripts/setup_dev.sh   # uv sync --all-groups, then checks a fresh interpreter c
 ### 2. Check the code
 
 ```bash
-uv run pytest tests/unit                                   # 920 unit tests, no simulator or database
+uv run pytest tests/unit                                   # 963 unit tests, no simulator or database
 uv run pytest tests/contracts                              # 159 contract tests
 uv run pytest -m integration                               # 32 tests: F1TENTH, MLflow and PostgreSQL
-uv run pytest                                              # everything (1,111 tests)
+uv run pytest                                              # everything (1,154 tests)
 uv run pytest -m "not integration" --cov=lapzero --cov=backend/app --cov-report=term-missing
 uv run mypy --strict lapzero backend/app scripts
 uv run ruff check . && uv run ruff format --check .
-cd frontend && npm run lint && npm run typecheck && npm test   # 153 frontend tests
+cd frontend && npm run lint && npm run typecheck && npm test   # 168 frontend tests
 ```
 
 Integration tests build their own small maps and temporary MLflow stores, so they need no track data and leave `mlruns/` alone. The 7 PostgreSQL tests in `tests/integration/backend/` also need the compose database (`docker compose up -d db`) and `DATABASE_URL` from `.env`; they create and drop their own throwaway databases.
@@ -474,23 +481,35 @@ done
 
 `eval_rollout.py` resolves `lapzero-policy@champion` to a version once and loads exactly that version, so the uploaded lap names the weights that drove it. It drives at the simulator's default friction, as human laps are recorded. The lap is written to `data/laps/<track>/` like any recorded lap, then POSTed; crashed or timed-out laps are uploaded with their status. The script exits 1 if the API does not answer 201. Use `--api` to target another API.
 
+To race two laps, open one in the Track Explorer and pick the other under **Compare with**. The clock runs to the end of the longer lap; the faster car waits at its finish.
+
+**An API without the MLflow registry** (a hosted one, say) can still serve the champion to the Governance page and the Champion badges. Export a snapshot of the registry's champion (version, run, contract version, tags and dates; no weights), commit it, and point `CHAMPION_SNAPSHOT` at it:
+
+```bash
+uv run python scripts/export_champion.py      # writes backend/champion_snapshot.json
+CHAMPION_SNAPSHOT=backend/champion_snapshot.json uv run uvicorn backend.app.main:app --port 8000
+```
+
+With `CHAMPION_SNAPSHOT` unset, the API reads the registry as before. Re-export after every promotion, since a snapshot does not follow the alias.
+
 The dashboard hides two tracks that exist in the local data, listed in [`frontend/src/lib/tracks.ts`](frontend/src/lib/tracks.ts): `spielberg_wide` (human laps on a widened copy of the Spielberg map; see [Limitations](#limitations-and-reproducibility)) and `oval` (an early test loop on which every lap crashed). [`frontend/README.md`](frontend/README.md) covers the dashboard's configuration, checks and API usage.
 
 ### Verification
 
-Results from updating this README on 2026-10-14, at commit `9654899`. The working tree differed only in `README.md` and `docs/assets/`.
+Results from updating this README on 2026-10-14, on base commit `2124590` plus the changes that add the champion snapshot and the lap comparison.
 
 | Check | Command | Result |
 |---|---|---|
-| Lint and format | `ruff check .` and `ruff format --check .` | Passed, 169 files formatted |
-| Types | `mypy --strict lapzero backend/app scripts` | No issues in 73 source files |
-| Unit + contract | `pytest -m "not integration" --cov=lapzero --cov=backend/app` | 1,079 passed. 99 % line coverage (2,948 statements, 32 missed, all in `sim/f1tenth.py` and `training/vec_env.py`, which only the integration tests exercise) |
+| Lint and format | `ruff check .` and `ruff format --check .` | Passed, 173 files formatted |
+| Types | `mypy --strict lapzero backend/app scripts` | No issues in 75 source files |
+| Unit + contract | `pytest -m "not integration" --cov=lapzero --cov=backend/app` | 1,122 passed. 99 % line coverage (3,033 statements, 32 missed, all in `sim/f1tenth.py` and `training/vec_env.py`, which only the integration tests exercise) |
 | Contract only | `pytest tests/contracts` | 159 passed |
-| Integration | `pytest -m integration` | 25 passed in 64 s. The 7 PostgreSQL tests were not run: no compose database was up, so they stopped at connecting |
-| Frontend | `npm run lint`, `npm run typecheck` and `npm test` in `frontend/` | Passed; 153 tests in 19 files |
+| Integration | `pytest -m integration` | 25 passed in 49 s. The 7 PostgreSQL tests were not run: no compose database was up, so they stopped at connecting |
+| Frontend | `npm run lint`, `npm run typecheck` and `npm test` in `frontend/` | Passed; 168 tests in 19 files |
 | Gate replay | `scripts/eval_gate.py` on the stored v5 and v8 sweeps, dry run | PROMOTE, −1.71 %, exit 0 |
 | Inference example | The snippet in [Inference engine](#inference-engine) | Completed lap, 46.16 s at μ 0.60 |
 | Dashboard upload | `scripts/eval_rollout.py --track spielberg`, then `--track moscowraceway` | Both laps completed (51.60 s and 58.72 s), and the API stored them (201) |
+| Champion snapshot | `scripts/export_champion.py`, then `GET /api/models/champion` with `CHAMPION_SNAPSHOT` set and no registry | Version 8 with its run, contract version and gate tags; the registry was never opened |
 
 ---
 
@@ -530,7 +549,8 @@ lapzero/
 │   └── io/                         # telemetry, replay, centreline, .npz reader (no sim/training imports)
 ├── backend/
 │   ├── app/                        # FastAPI: routers, services, SQLAlchemy models, settings
-│   └── alembic/                    # database migrations
+│   ├── alembic/                    # database migrations
+│   └── champion_snapshot.json      # the registry's champion, for a hosted API (no weights)
 ├── frontend/                       # React dashboard: leaderboard, Track Explorer, governance
 ├── schemas/                        # JSON Schemas for lap telemetry and replays
 ├── scripts/                        # thin CLIs over lapzero/
@@ -540,11 +560,12 @@ lapzero/
 │   ├── eval_sweep.py               # friction sweep → sweep.json
 │   ├── eval_gate.py                # release gate and optional promotion
 │   ├── eval_rollout.py             # drive the champion one lap and upload it to the API
+│   ├── export_champion.py          # champion snapshot for an API without the registry
 │   ├── check_sim_params.py         # check the simulator's values against the contract
 │   └── setup_dev.sh                # uv sync and import check
 ├── tests/
 │   ├── contracts/                  # 159 tests that lock docs/contracts/state_space.md
-│   ├── unit/                       # 920 tests mirroring lapzero/ and backend/app/, no simulator
+│   ├── unit/                       # 963 tests mirroring lapzero/ and backend/app/, no simulator
 │   └── integration/                # 32 tests on real F1TENTH Gym, MLflow stores and PostgreSQL
 ├── docs/
 │   ├── contracts/state_space.md    # binding state-space contract
@@ -565,7 +586,7 @@ lapzero/
 - **Version-guarded aliases.** The gate's verdict applies to specific versions. Checking that both aliases still point at the swept versions turns a race between training and promotion into an error instead of a silent promotion of an unevaluated model.
 - **A BC warm start that PPO cannot immediately wreck.** The PPO actor copies the BC network's layers and puts tanh on the action mean, so the starting deterministic policy is exactly the BC policy. Before the actor may change, a critic warm-up of 5 rollouts trains the value function with the actor frozen. A small action noise (`log_std_init=-1`), a low learning rate (3e-5), clip 0.1 and a KL cap of 0.02 keep early updates close to the BC policy. The fine-tuned actor is exported back to the BC checkpoint format, so every model loads the same way.
 - **Typed telemetry with cross-field invariants.** Range checks alone would accept a frame claiming a completed lap with zero laps counted, or a lap time longer than the episode. The validators reject these at the I/O boundary rather than leaving every consumer to re-check them.
-- **A simulator protocol for testability.** Because `LapZeroEnv` depends on a `Simulator` protocol rather than on F1TENTH, the 1,079 unit and contract tests run in about 30 s with a scripted fake. That includes property-based tests that feed NaN, inf and out-of-range values through the observation and action mappings.
+- **A simulator protocol for testability.** Because `LapZeroEnv` depends on a `Simulator` protocol rather than on F1TENTH, the 1,122 unit and contract tests run in about 30 s with a scripted fake. That includes property-based tests that feed NaN, inf and out-of-range values through the observation and action mappings.
 
 ---
 
@@ -588,7 +609,7 @@ Planned in the project instructions and the contract, but **not implemented in t
 
 - GitHub Actions for CI and for running the release gate (`ci.yml`, `release-gate.yml`)
 - SAC as a second RL algorithm
-- A hosted deployment of the API and dashboard
+- Deployment configuration in the repository for the hosted API (the Render service is set up by hand; the dashboard's `frontend/vercel.json` only adds the SPA rewrite)
 - A script in the repository that renders demo GIFs from sweep traces (the [Demo](#demo) GIF was drawn by a one-off script)
 
 ## Stack

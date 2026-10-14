@@ -30,7 +30,13 @@ function View({ route }: { route: Route }) {
     case "tracks":
       return <TrackIndexView />;
     case "track":
-      return <TrackViewerView trackId={route.trackId} lapId={route.lapId} />;
+      return (
+        <TrackViewerView
+          trackId={route.trackId}
+          lapId={route.lapId}
+          compareLapId={route.compareLapId ?? null}
+        />
+      );
     case "governance":
       return <ChampionView />;
     case "not-found":

@@ -2,7 +2,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { squareTrack, straightReplay } from "../../test/fixtures";
+import type { Replay } from "../../api/types";
+import { LAP_P2, squareTrack, straightReplay } from "../../test/fixtures";
 import { ReplayWorkspace } from "./ReplayWorkspace";
 
 function renderReplay(replay = straightReplay()) {
@@ -99,5 +100,56 @@ describe("ReplayWorkspace", () => {
   it("says when the track has no centreline", () => {
     render(<ReplayWorkspace replay={straightReplay()} geometry={null} trackName="spielberg" />);
     expect(screen.getByText(/no centreline for this track/)).toBeInTheDocument();
+  });
+});
+
+/** A 4 s human lap (twice the open lap's 2 s), 1:17.20 on the leaderboard. */
+function humanReplay(): Replay {
+  const t = Array.from({ length: 41 }, (_, i) => i / 10);
+  return {
+    ...straightReplay(LAP_P2),
+    driver_label: "human",
+    lap_time_s: 77.2,
+    points: {
+      t,
+      x: t.map((s) => 2.5 * s),
+      y: t.map(() => 1),
+      theta: t.map(() => 0),
+      v: t.map(() => 2.5),
+      steer: t.map(() => 0),
+    },
+  };
+}
+
+describe("ReplayWorkspace with a compared lap", () => {
+  it("runs the clock to the end of the longer lap and names the compared lap", () => {
+    render(
+      <ReplayWorkspace
+        replay={straightReplay()}
+        geometry={squareTrack().geometry}
+        trackName="spielberg"
+        compare={humanReplay()}
+      />,
+    );
+    expect(screen.getByRole("slider", { name: "Replay position" })).toHaveAttribute("max", "4");
+    expect(screen.getByText("human, 1:17.20 (+31.22 s)")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /compared with human, 1:17.20/ })).toBeInTheDocument();
+  });
+
+  it("ignores a compared lap without usable samples", () => {
+    const empty = {
+      ...humanReplay(),
+      points: { t: [], x: [], y: [], theta: [], v: [], steer: [] },
+    };
+    render(
+      <ReplayWorkspace
+        replay={straightReplay()}
+        geometry={squareTrack().geometry}
+        trackName="spielberg"
+        compare={empty}
+      />,
+    );
+    expect(screen.getByRole("slider", { name: "Replay position" })).toHaveAttribute("max", "2");
+    expect(screen.queryByText(/human, 1:17.20/)).not.toBeInTheDocument();
   });
 });

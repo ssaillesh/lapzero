@@ -5,6 +5,7 @@ No test may write to the repo's real mlruns/: default-URI tests patch get_tracki
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,15 +13,18 @@ from mlflow.exceptions import MlflowException
 
 from lapzero import registry
 from lapzero.eval.sweep import SweepReport
+from lapzero.io.champion import read_champion_snapshot
 from lapzero.registry import (
+    CONTRACT_VERSION_PARAM,
     DEFAULT_GATE_TRACK,
     GATE_PROMOTE,
+    export_champion,
     get_champion_version,
     get_tracking_uri,
     promote_challenger,
     promote_from_sweeps,
 )
-from lapzero.training.tracking import ModelAlias, mlflow_client
+from lapzero.training.tracking import ModelAlias, contract_params, mlflow_client
 from tests.conftest import make_sweep_report, register_model_versions
 
 MODEL = "test-policy"
@@ -260,3 +264,64 @@ def test_promotion_from_sweeps_refuses_sweeps_on_different_tracks(tracking_uri: 
             _sweep(CHALLENGER_SWEEP, "2", "challenger", track_id="track_b"),
         )
     assert _aliases(tracking_uri) == {"champion": "1", "challenger": "2"}
+
+
+# Champion snapshot
+
+EXPORTED_AT = datetime(2026, 10, 14, 6, 30, tzinfo=UTC)
+
+
+def _version_with_run(tracking_uri: str, contract_version: str) -> str:
+    """Register MODEL version 1 from a run that logged `contract_version`; return the run ID."""
+    client = mlflow_client(tracking_uri)
+    run_id = client.create_run(client.create_experiment("train")).info.run_id
+    client.log_param(run_id, CONTRACT_VERSION_PARAM, contract_version)
+    client.create_registered_model(MODEL)
+    tags = {"gate_result": GATE_PROMOTE, "gate_track": "oschersleben"}
+    client.create_model_version(MODEL, "file:///weights/1", run_id=run_id, tags=tags)
+    client.set_registered_model_alias(MODEL, ModelAlias.CHAMPION, "1")
+    return run_id
+
+
+def test_the_contract_version_param_is_the_one_training_logs() -> None:
+    assert CONTRACT_VERSION_PARAM in contract_params()
+
+
+def test_export_writes_the_champion_version_its_run_and_its_gate_tags(
+    tracking_uri: str, tmp_path: Path
+) -> None:
+    run_id = _version_with_run(tracking_uri, "1.1.0")
+    path = tmp_path / "backend" / "champion_snapshot.json"
+
+    snapshot = export_champion(
+        path, tracking_uri=tracking_uri, model_name=MODEL, clock=lambda: EXPORTED_AT
+    )
+
+    assert read_champion_snapshot(path) == snapshot
+    assert (snapshot.model_name, snapshot.version, snapshot.run_id) == (MODEL, "1", run_id)
+    assert snapshot.contract_version == "1.1.0"
+    assert snapshot.tags == {"gate_result": GATE_PROMOTE, "gate_track": "oschersleben"}
+    assert snapshot.exported_at == EXPORTED_AT
+    registered = mlflow_client(tracking_uri).get_model_version(MODEL, "1").creation_timestamp
+    assert snapshot.created_at == datetime.fromtimestamp(registered / 1000, tz=UTC)
+
+
+def test_export_of_a_version_without_a_run_has_no_run_or_contract(
+    tracking_uri: str, tmp_path: Path
+) -> None:
+    _registry(tracking_uri, 2, {ModelAlias.CHAMPION: "2"})
+
+    snapshot = export_champion(tmp_path / "c.json", tracking_uri=tracking_uri, model_name=MODEL)
+
+    assert (snapshot.version, snapshot.run_id, snapshot.contract_version) == ("2", None, None)
+    assert snapshot.tags == {"algorithm": "ppo"}
+
+
+def test_export_without_a_champion_raises_and_writes_nothing(
+    tracking_uri: str, tmp_path: Path
+) -> None:
+    _registry(tracking_uri, 1, {ModelAlias.CHALLENGER: "1"})
+
+    with pytest.raises(MlflowException):
+        export_champion(tmp_path / "c.json", tracking_uri=tracking_uri, model_name=MODEL)
+    assert not (tmp_path / "c.json").exists()

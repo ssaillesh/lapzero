@@ -42,6 +42,8 @@ class Settings(BaseSettings):
         mlflow_tracking_uri: MLflow tracking URI holding the model registry; defaults to the
             repo's mlruns/ store, where the training scripts register models.
         mlflow_model_name: Registered model whose champion GET /api/models/champion reports.
+        champion_snapshot: JSON file written by scripts/export_champion.py. When set, the
+            champion is served from it instead of the registry, for an API without MLflow.
         cors_origins: Browser origins allowed to call the API. CORS_ORIGINS may be a JSON list,
             one origin, or comma-separated origins (see _parse_cors_origins).
         environment: Where the backend runs; logged at startup.
@@ -54,6 +56,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://lapzero@localhost:5432/lapzero"
     mlflow_tracking_uri: str = (REPO_ROOT / "mlruns").as_uri()
     mlflow_model_name: str = Field(default="lapzero-policy", min_length=1)
+    champion_snapshot: Path | None = None
     # NoDecode: the raw string reaches _parse_cors_origins instead of failing JSON decoding.
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://localhost:3000"]
