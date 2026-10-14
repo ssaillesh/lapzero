@@ -69,6 +69,68 @@ def test_environment_variables_override_the_defaults(
     assert settings.laps_dir == tmp_path / "laps"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://lapzero.example",  # one origin, not JSON
+        "https://lapzero.example/",  # trailing slash: a browser's Origin never has one
+        '"https://lapzero.example"',  # quoted origin
+        '\u00a0["https://lapzero.example"]',  # non-breaking space pasted from a web page
+        '\ufeff["https://lapzero.example"]',  # byte order mark
+        '\u200b["https://lapzero.example"] ',  # zero-width space and trailing space
+        "'[\"https://lapzero.example\"]'",  # JSON list wrapped in shell-style quotes
+        "[\u201chttps://lapzero.example\u201d]",  # curly quotes inside the JSON list
+    ],
+)
+def test_cors_origins_tolerate_how_hosting_dashboards_get_them_pasted(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("CORS_ORIGINS", value)
+
+    assert Settings(_env_file=None).cors_origins == ["https://lapzero.example"]
+
+
+def test_cors_origins_may_be_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CORS_ORIGINS", " https://a.example, https://b.example/ ,")
+
+    assert Settings(_env_file=None).cors_origins == ["https://a.example", "https://b.example"]
+
+
+def test_cors_origins_in_a_dotenv_file_may_be_comma_separated(tmp_path: Path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("CORS_ORIGINS=https://a.example,https://b.example\n")
+
+    settings = Settings(_env_file=dotenv)
+
+    assert settings.cors_origins == ["https://a.example", "https://b.example"]
+
+
+@pytest.mark.parametrize("value", ["", "   ", "[]", '[""]', ",", "''"])
+def test_cors_origins_without_an_origin_are_rejected_with_a_hint(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("CORS_ORIGINS", value)
+
+    with pytest.raises(ValidationError, match="CORS_ORIGINS holds no origin"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ('["https://lapzero.example"', "CORS_ORIGINS is not a valid JSON list"),
+        ('["https://lapzero.example", 5]', "CORS_ORIGINS must be a JSON list of strings"),
+    ],
+)
+def test_a_broken_json_list_of_cors_origins_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, value: str, message: str
+) -> None:
+    monkeypatch.setenv("CORS_ORIGINS", value)
+
+    with pytest.raises(ValidationError, match=message):
+        Settings(_env_file=None)
+
+
 def test_dotenv_file_is_read_and_its_container_only_keys_are_ignored(tmp_path: Path) -> None:
     dotenv = tmp_path / ".env"
     dotenv.write_text(
